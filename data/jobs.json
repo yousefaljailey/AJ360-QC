@@ -1,0 +1,749 @@
+{
+  "jobs": [
+    {
+      "id": "JB_EB723435",
+      "filename": "PGC202317-WEV-E0001-INT_1.mp4",
+      "duration": "14:28",
+      "size": "1.4 GB",
+      "resolution": "3840x2160",
+      "format": "MP4",
+      "status": "completed",
+      "score": 32,
+      "aj360Pass": false,
+      "report": {
+        "checks": {
+          "format": {
+            "label": "File Format",
+            "pass": false,
+            "value": "MP4",
+            "expected": "MXF",
+            "icon": "📄"
+          },
+          "resolution": {
+            "label": "Resolution",
+            "pass": true,
+            "value": "3840x2160",
+            "expected": "3840×2160 (UHD)",
+            "icon": "🖥"
+          },
+          "frameRate": {
+            "label": "Frame Rate",
+            "pass": true,
+            "value": "25.00 fps",
+            "expected": "25 fps",
+            "icon": "🎞"
+          },
+          "aspectRatio": {
+            "label": "Aspect Ratio",
+            "pass": true,
+            "value": "16:9",
+            "expected": "16:9",
+            "icon": "📐"
+          },
+          "audioCodec": {
+            "label": "Audio Codec",
+            "pass": false,
+            "value": "AAC",
+            "expected": "PCM 24-bit (pcm_s24le)",
+            "icon": "🔊"
+          },
+          "sampleRate": {
+            "label": "Sample Rate",
+            "pass": true,
+            "value": "48000 Hz",
+            "expected": "48,000 Hz",
+            "icon": "〰"
+          },
+          "audioTracks": {
+            "label": "Audio Tracks",
+            "pass": false,
+            "value": "1 track",
+            "expected": "4 tracks: Left / Right / Left Mix Minus / Right Mix Minus",
+            "tracks": [
+              {
+                "index": 1,
+                "label": "Left",
+                "expected": "Left",
+                "codec": "aac",
+                "sampleRate": "48000",
+                "channels": 2,
+                "layout": "stereo",
+                "codecOk": false,
+                "sampleOk": true
+              }
+            ],
+            "icon": "🎚"
+          },
+          "blackFrames": {
+            "label": "Black Frames",
+            "icon": "⬛",
+            "pass": false,
+            "count": 5,
+            "timecodes": [
+              {
+                "start": "00:00:00:00",
+                "end": "00:00:06:01",
+                "startSecs": 0,
+                "endSecs": 6.04,
+                "duration": "6.04s"
+              },
+              {
+                "start": "00:00:43:11",
+                "end": "00:01:08:10",
+                "startSecs": 43.48,
+                "endSecs": 68.4,
+                "duration": "24.92s"
+              },
+              {
+                "start": "00:12:04:02",
+                "end": "00:12:04:03",
+                "startSecs": 724.08,
+                "endSecs": 724.12,
+                "duration": "0.04s"
+              },
+              {
+                "start": "00:13:34:03",
+                "end": "00:13:34:05",
+                "startSecs": 814.16,
+                "endSecs": 814.2,
+                "duration": "0.04s"
+              },
+              {
+                "start": "00:13:53:03",
+                "end": "00:14:28:15",
+                "startSecs": 833.16,
+                "endSecs": 868.64,
+                "duration": "35.48s"
+              }
+            ],
+            "expected": "No black frames"
+          },
+          "loudness": {
+            "label": "Loudness (EBU R128)",
+            "icon": "📊",
+            "pass": false,
+            "value": "-70.0 LUFS",
+            "measured": -70,
+            "expected": "-23 LUFS (±1 LU)",
+            "lra": "0.0 LU",
+            "truePeak": "—"
+          }
+        },
+        "overallPass": false,
+        "aj360Pass": false,
+        "score": 32,
+        "passedCount": 4,
+        "failedCount": 5,
+        "fileInfo": {
+          "format": "MP4",
+          "fileSize": "1.4 GB",
+          "videoCodec": "H264",
+          "bitRate": "13 Mbps",
+          "duration": "14:28",
+          "frameRate": "25.00 fps",
+          "resolution": "3840x2160"
+        },
+        "audioInfo": {
+          "codec": "AAC",
+          "sampleRate": "48000 Hz",
+          "channels": 1,
+          "tracks": [
+            {
+              "index": 1,
+              "label": "Left",
+              "expected": "Left",
+              "codec": "aac",
+              "sampleRate": "48000",
+              "channels": 2,
+              "layout": "stereo",
+              "codecOk": false,
+              "sampleOk": true
+            }
+          ],
+          "loudness": "-70.0 LUFS",
+          "truePeak": "—",
+          "lra": "0.0 LU"
+        }
+      },
+      "uploadedAt": "2026-03-23T23:25:52.737Z",
+      "uploadedBy": "algaileyy@aljazeera.net"
+    },
+    {
+      "id": "JB_69C1AF6E",
+      "filename": "AJA_DOHA_PKG_001.mxf",
+      "duration": "18:32",
+      "size": "42.1 GB",
+      "resolution": "3840x2160",
+      "status": "completed",
+      "score": 100,
+      "aj360Pass": true,
+      "format": "MXF",
+      "uploadedAt": "2026-03-23T21:23:58.093Z",
+      "uploadedBy": "algaileyy@aljazeera.net",
+      "report": {
+        "checks": {
+          "format": {
+            "label": "File Format",
+            "icon": "📄",
+            "pass": true,
+            "value": "MXF",
+            "expected": "MXF"
+          },
+          "resolution": {
+            "label": "Resolution",
+            "icon": "🖥",
+            "pass": true,
+            "value": "3840x2160",
+            "expected": "3840×2160 (UHD)"
+          },
+          "frameRate": {
+            "label": "Frame Rate",
+            "icon": "🎞",
+            "pass": true,
+            "value": "25.00 fps",
+            "expected": "25 fps"
+          },
+          "aspectRatio": {
+            "label": "Aspect Ratio",
+            "icon": "📐",
+            "pass": true,
+            "value": "16:9",
+            "expected": "16:9"
+          },
+          "audioCodec": {
+            "label": "Audio Codec",
+            "icon": "🔊",
+            "pass": true,
+            "value": "PCM_S24LE",
+            "expected": "PCM 24-bit (pcm_s24le)"
+          },
+          "sampleRate": {
+            "label": "Sample Rate",
+            "icon": "〰",
+            "pass": true,
+            "value": "48000 Hz",
+            "expected": "48,000 Hz"
+          },
+          "audioTracks": {
+            "label": "Audio Tracks",
+            "icon": "🎚",
+            "pass": true,
+            "value": "4 tracks",
+            "expected": "4 tracks: Left / Right / Left Mix Minus / Right Mix Minus",
+            "tracks": [
+              {
+                "index": 1,
+                "label": "Left",
+                "expected": "Left",
+                "codec": "pcm_s24le",
+                "sampleRate": "48000",
+                "channels": 1,
+                "layout": "mono",
+                "codecOk": true,
+                "sampleOk": true
+              },
+              {
+                "index": 2,
+                "label": "Right",
+                "expected": "Right",
+                "codec": "pcm_s24le",
+                "sampleRate": "48000",
+                "channels": 1,
+                "layout": "mono",
+                "codecOk": true,
+                "sampleOk": true
+              },
+              {
+                "index": 3,
+                "label": "Left Mix Minus",
+                "expected": "Left Mix Minus",
+                "codec": "pcm_s24le",
+                "sampleRate": "48000",
+                "channels": 1,
+                "layout": "mono",
+                "codecOk": true,
+                "sampleOk": true
+              },
+              {
+                "index": 4,
+                "label": "Right Mix Minus",
+                "expected": "Right Mix Minus",
+                "codec": "pcm_s24le",
+                "sampleRate": "48000",
+                "channels": 1,
+                "layout": "mono",
+                "codecOk": true,
+                "sampleOk": true
+              }
+            ]
+          },
+          "loudness": {
+            "label": "Loudness (EBU R128)",
+            "icon": "📊",
+            "pass": true,
+            "value": "-23.1 LUFS",
+            "expected": "-23 LUFS (±1 LU)",
+            "measured": -23.1,
+            "lra": "6.4 LU",
+            "truePeak": "-1.2 dBFS"
+          },
+          "blackFrames": {
+            "label": "Black Frames",
+            "icon": "⬛",
+            "pass": true,
+            "count": 0,
+            "timecodes": [],
+            "expected": "No black frames"
+          }
+        },
+        "overallPass": true,
+        "aj360Pass": true,
+        "score": 100,
+        "passedCount": 9,
+        "failedCount": 0,
+        "fileInfo": {
+          "format": "MXF",
+          "fileSize": "42.1 GB",
+          "resolution": "3840x2160",
+          "videoCodec": "DNXHD",
+          "bitRate": "185 Mbps",
+          "frameRate": "25.00 fps"
+        },
+        "audioInfo": {
+          "codec": "PCM_S24LE",
+          "sampleRate": "48000 Hz",
+          "channels": 4,
+          "tracks": [
+            {
+              "index": 1,
+              "label": "Left",
+              "expected": "Left",
+              "codec": "pcm_s24le",
+              "sampleRate": "48000",
+              "channels": 1,
+              "layout": "mono",
+              "codecOk": true,
+              "sampleOk": true
+            },
+            {
+              "index": 2,
+              "label": "Right",
+              "expected": "Right",
+              "codec": "pcm_s24le",
+              "sampleRate": "48000",
+              "channels": 1,
+              "layout": "mono",
+              "codecOk": true,
+              "sampleOk": true
+            },
+            {
+              "index": 3,
+              "label": "Left Mix Minus",
+              "expected": "Left Mix Minus",
+              "codec": "pcm_s24le",
+              "sampleRate": "48000",
+              "channels": 1,
+              "layout": "mono",
+              "codecOk": true,
+              "sampleOk": true
+            },
+            {
+              "index": 4,
+              "label": "Right Mix Minus",
+              "expected": "Right Mix Minus",
+              "codec": "pcm_s24le",
+              "sampleRate": "48000",
+              "channels": 1,
+              "layout": "mono",
+              "codecOk": true,
+              "sampleOk": true
+            }
+          ],
+          "loudness": "-23.1 LUFS",
+          "truePeak": "-1.2 dBFS",
+          "lra": "6.4 LU"
+        }
+      }
+    },
+    {
+      "id": "JB_69C1A15E",
+      "filename": "SPORT_FINAL_MASTER.mov",
+      "duration": "45:10",
+      "size": "118.3 GB",
+      "resolution": "3840x2160",
+      "status": "completed",
+      "score": 32,
+      "aj360Pass": false,
+      "format": "MOV",
+      "uploadedAt": "2026-03-23T20:23:58.093Z",
+      "uploadedBy": "algaileyy@aljazeera.net",
+      "report": {
+        "checks": {
+          "format": {
+            "label": "File Format",
+            "icon": "📄",
+            "pass": false,
+            "value": "MOV",
+            "expected": "MXF"
+          },
+          "resolution": {
+            "label": "Resolution",
+            "icon": "🖥",
+            "pass": true,
+            "value": "3840x2160",
+            "expected": "3840×2160 (UHD)"
+          },
+          "frameRate": {
+            "label": "Frame Rate",
+            "icon": "🎞",
+            "pass": false,
+            "value": "29.97 fps",
+            "expected": "25 fps"
+          },
+          "aspectRatio": {
+            "label": "Aspect Ratio",
+            "icon": "📐",
+            "pass": true,
+            "value": "16:9",
+            "expected": "16:9"
+          },
+          "audioCodec": {
+            "label": "Audio Codec",
+            "icon": "🔊",
+            "pass": false,
+            "value": "AAC",
+            "expected": "PCM 24-bit (pcm_s24le)"
+          },
+          "sampleRate": {
+            "label": "Sample Rate",
+            "icon": "〰",
+            "pass": false,
+            "value": "44100 Hz",
+            "expected": "48,000 Hz"
+          },
+          "audioTracks": {
+            "label": "Audio Tracks",
+            "icon": "🎚",
+            "pass": false,
+            "value": "2 tracks",
+            "expected": "4 tracks: Left / Right / Left Mix Minus / Right Mix Minus",
+            "tracks": [
+              {
+                "index": 1,
+                "label": "Left",
+                "expected": "Left",
+                "codec": "aac",
+                "sampleRate": "44100",
+                "channels": 2,
+                "layout": "stereo",
+                "codecOk": false,
+                "sampleOk": false
+              },
+              {
+                "index": 2,
+                "label": "Right",
+                "expected": "Right",
+                "codec": "aac",
+                "sampleRate": "44100",
+                "channels": 2,
+                "layout": "stereo",
+                "codecOk": false,
+                "sampleOk": false
+              }
+            ]
+          },
+          "loudness": {
+            "label": "Loudness (EBU R128)",
+            "icon": "📊",
+            "pass": false,
+            "value": "-18.5 LUFS",
+            "expected": "-23 LUFS (±1 LU)",
+            "measured": -18.5,
+            "lra": "6.4 LU",
+            "truePeak": "-0.3 dBFS"
+          },
+          "blackFrames": {
+            "label": "Black Frames",
+            "icon": "⬛",
+            "pass": false,
+            "count": 3,
+            "timecodes": [
+              {
+                "start": "00:04:11:12",
+                "end": "00:04:11:22",
+                "duration": "0.40s"
+              },
+              {
+                "start": "00:22:07:03",
+                "end": "00:22:07:18",
+                "duration": "0.60s"
+              },
+              {
+                "start": "01:01:44:00",
+                "end": "01:01:45:10",
+                "duration": "1.40s"
+              }
+            ],
+            "expected": "No black frames"
+          }
+        },
+        "overallPass": false,
+        "aj360Pass": false,
+        "score": 32,
+        "passedCount": 2,
+        "failedCount": 7,
+        "fileInfo": {
+          "format": "MOV",
+          "fileSize": "118.3 GB",
+          "resolution": "3840x2160",
+          "videoCodec": "H.264",
+          "bitRate": "51.3 Mbps",
+          "frameRate": "29.97 fps"
+        },
+        "audioInfo": {
+          "codec": "AAC",
+          "sampleRate": "44100 Hz",
+          "channels": 2,
+          "tracks": [
+            {
+              "index": 1,
+              "label": "Left",
+              "expected": "Left",
+              "codec": "aac",
+              "sampleRate": "44100",
+              "channels": 2,
+              "layout": "stereo",
+              "codecOk": false,
+              "sampleOk": false
+            },
+            {
+              "index": 2,
+              "label": "Right",
+              "expected": "Right",
+              "codec": "aac",
+              "sampleRate": "44100",
+              "channels": 2,
+              "layout": "stereo",
+              "codecOk": false,
+              "sampleOk": false
+            }
+          ],
+          "loudness": "-18.5 LUFS",
+          "truePeak": "-0.3 dBFS",
+          "lra": "6.4 LU"
+        }
+      }
+    },
+    {
+      "id": "JB_69C1C486",
+      "filename": "DOCUMENTARY_ROUGH_CUT.mp4",
+      "duration": "1:12:05",
+      "size": "247.8 GB",
+      "resolution": "3840x2160",
+      "status": "processing",
+      "score": null,
+      "aj360Pass": null,
+      "format": "MP4",
+      "uploadedAt": "2026-03-23T22:53:58.093Z",
+      "uploadedBy": "algaileyy@aljazeera.net",
+      "report": null
+    },
+    {
+      "id": "JB_69C1C80A",
+      "filename": "BREAKING_NEWS_0316.mxf",
+      "duration": "03:22",
+      "size": "8.4 GB",
+      "resolution": "3840x2160",
+      "status": "completed",
+      "score": 84,
+      "aj360Pass": true,
+      "format": "MXF",
+      "uploadedAt": "2026-03-23T23:08:58.093Z",
+      "uploadedBy": "algaileyy@aljazeera.net",
+      "report": {
+        "checks": {
+          "format": {
+            "label": "File Format",
+            "icon": "📄",
+            "pass": true,
+            "value": "MXF",
+            "expected": "MXF"
+          },
+          "resolution": {
+            "label": "Resolution",
+            "icon": "🖥",
+            "pass": true,
+            "value": "3840x2160",
+            "expected": "3840×2160 (UHD)"
+          },
+          "frameRate": {
+            "label": "Frame Rate",
+            "icon": "🎞",
+            "pass": true,
+            "value": "25.00 fps",
+            "expected": "25 fps"
+          },
+          "aspectRatio": {
+            "label": "Aspect Ratio",
+            "icon": "📐",
+            "pass": true,
+            "value": "16:9",
+            "expected": "16:9"
+          },
+          "audioCodec": {
+            "label": "Audio Codec",
+            "icon": "🔊",
+            "pass": true,
+            "value": "PCM_S24LE",
+            "expected": "PCM 24-bit (pcm_s24le)"
+          },
+          "sampleRate": {
+            "label": "Sample Rate",
+            "icon": "〰",
+            "pass": true,
+            "value": "48000 Hz",
+            "expected": "48,000 Hz"
+          },
+          "audioTracks": {
+            "label": "Audio Tracks",
+            "icon": "🎚",
+            "pass": true,
+            "value": "4 tracks",
+            "expected": "4 tracks: Left / Right / Left Mix Minus / Right Mix Minus",
+            "tracks": [
+              {
+                "index": 1,
+                "label": "Left",
+                "expected": "Left",
+                "codec": "pcm_s24le",
+                "sampleRate": "48000",
+                "channels": 1,
+                "layout": "mono",
+                "codecOk": true,
+                "sampleOk": true
+              },
+              {
+                "index": 2,
+                "label": "Right",
+                "expected": "Right",
+                "codec": "pcm_s24le",
+                "sampleRate": "48000",
+                "channels": 1,
+                "layout": "mono",
+                "codecOk": true,
+                "sampleOk": true
+              },
+              {
+                "index": 3,
+                "label": "Left Mix Minus",
+                "expected": "Left Mix Minus",
+                "codec": "pcm_s24le",
+                "sampleRate": "48000",
+                "channels": 1,
+                "layout": "mono",
+                "codecOk": true,
+                "sampleOk": true
+              },
+              {
+                "index": 4,
+                "label": "Right Mix Minus",
+                "expected": "Right Mix Minus",
+                "codec": "pcm_s24le",
+                "sampleRate": "48000",
+                "channels": 1,
+                "layout": "mono",
+                "codecOk": true,
+                "sampleOk": true
+              }
+            ]
+          },
+          "loudness": {
+            "label": "Loudness (EBU R128)",
+            "icon": "📊",
+            "pass": true,
+            "value": "-23.1 LUFS",
+            "expected": "-23 LUFS (±1 LU)",
+            "measured": -23.1,
+            "lra": "6.4 LU",
+            "truePeak": "-1.2 dBFS"
+          },
+          "blackFrames": {
+            "label": "Black Frames",
+            "icon": "⬛",
+            "pass": true,
+            "count": 0,
+            "timecodes": [],
+            "expected": "No black frames"
+          }
+        },
+        "overallPass": true,
+        "aj360Pass": true,
+        "score": 84,
+        "passedCount": 9,
+        "failedCount": 0,
+        "fileInfo": {
+          "format": "MXF",
+          "fileSize": "8.4 GB",
+          "resolution": "3840x2160",
+          "videoCodec": "DNXHD",
+          "bitRate": "185 Mbps",
+          "frameRate": "25.00 fps"
+        },
+        "audioInfo": {
+          "codec": "PCM_S24LE",
+          "sampleRate": "48000 Hz",
+          "channels": 4,
+          "tracks": [
+            {
+              "index": 1,
+              "label": "Left",
+              "expected": "Left",
+              "codec": "pcm_s24le",
+              "sampleRate": "48000",
+              "channels": 1,
+              "layout": "mono",
+              "codecOk": true,
+              "sampleOk": true
+            },
+            {
+              "index": 2,
+              "label": "Right",
+              "expected": "Right",
+              "codec": "pcm_s24le",
+              "sampleRate": "48000",
+              "channels": 1,
+              "layout": "mono",
+              "codecOk": true,
+              "sampleOk": true
+            },
+            {
+              "index": 3,
+              "label": "Left Mix Minus",
+              "expected": "Left Mix Minus",
+              "codec": "pcm_s24le",
+              "sampleRate": "48000",
+              "channels": 1,
+              "layout": "mono",
+              "codecOk": true,
+              "sampleOk": true
+            },
+            {
+              "index": 4,
+              "label": "Right Mix Minus",
+              "expected": "Right Mix Minus",
+              "codec": "pcm_s24le",
+              "sampleRate": "48000",
+              "channels": 1,
+              "layout": "mono",
+              "codecOk": true,
+              "sampleOk": true
+            }
+          ],
+          "loudness": "-23.1 LUFS",
+          "truePeak": "-1.2 dBFS",
+          "lra": "6.4 LU"
+        }
+      }
+    }
+  ]
+}

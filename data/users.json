@@ -1,0 +1,14 @@
+{
+  "users": [
+    {
+      "id": "1578ab54-d113-441c-a92e-44515ecb877c",
+      "name": "Youssef Al Gaiey",
+      "email": "algaileyy@aljazeera.net",
+      "department": "Administration",
+      "passwordHash": "$2b$12$iiPYxl8ap.BFhrZyxOTM5uPhkbLjY63tjmCUinnsnVSf3fFYYsqgi",
+      "role": "admin",
+      "status": "approved",
+      "createdAt": "2026-03-23T22:39:43.506Z"
+    }
+  ]
+}
