@@ -1,5 +1,8 @@
 {
-  "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/index" }
-  ]
+  "build": {
+    "env": {
+      "PUPPETEER_SKIP_DOWNLOAD": "true",
+      "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true"
+    }
+  }
 }
