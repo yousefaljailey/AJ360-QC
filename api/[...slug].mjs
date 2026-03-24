@@ -83,8 +83,11 @@ export default async function handler(req, res) {
   ensureAdmin();
 
   // slug is ['login'], ['jobs'], ['jobs','JB_123'], ['admin','users'], etc.
-  const slug   = Array.isArray(req.query.slug) ? req.query.slug : [req.query.slug].filter(Boolean);
   const method = req.method;
+  // Parse route from req.url (works regardless of which Vercel function entry point is used)
+  const urlPath = (req.url || '').split('?')[0];
+  const apiPath = urlPath.replace(/^\/api\//, '').replace(/^\/api$/, '');
+  const slug    = apiPath ? apiPath.split('/') : [];
   // Parse body — Vercel auto-parses JSON but guard against edge cases
   let body = req.body;
   if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
