@@ -904,15 +904,26 @@ async function openReport(id) {
 
     // Black frames timecodes (only when actually measured and failing)
     if (isBlack && !unmeasured && !c.pass && c.timecodes?.length) {
-      detail = `<div style="margin-top:8px;padding:8px;background:rgba(239,68,68,0.08);border-radius:6px;border:1px solid rgba(239,68,68,0.2)">
-        <div style="font-size:10px;font-weight:700;color:var(--fail);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.06em">Black Frame Timecodes (${c.timecodes.length} occurrence${c.timecodes.length!==1?'s':''})</div>
+      detail = `<div style="margin-top:10px;padding:12px;background:rgba(239,68,68,0.07);border-radius:8px;border:1px solid rgba(239,68,68,0.25)">
+        <div style="font-size:11px;font-weight:700;color:var(--fail);margin-bottom:8px;display:flex;align-items:center;gap:8px">
+          <span>⬛ Black Frame Timecodes</span>
+          <span style="font-weight:400;color:var(--muted)">${c.timecodes.length} event${c.timecodes.length!==1?'s':''} detected</span>
+        </div>
         <table style="width:100%;font-size:11px;border-collapse:collapse">
-          <tr style="color:var(--muted)"><td style="padding:2px 8px 2px 0">IN</td><td style="padding:2px 8px">OUT</td><td style="padding:2px 0">Duration</td></tr>
-          ${c.timecodes.map(tc => `<tr style="color:var(--fail)">
-            <td style="padding:2px 8px 2px 0;font-family:monospace">${tc.start}</td>
-            <td style="padding:2px 8px;font-family:monospace">${tc.end}</td>
-            <td style="padding:2px 0;color:var(--muted)">${tc.duration}</td>
+          <thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.06em">
+            <td style="padding:4px 12px 4px 0;border-bottom:1px solid var(--border)">Event</td>
+            <td style="padding:4px 12px;border-bottom:1px solid var(--border)">Timecode IN</td>
+            <td style="padding:4px 12px;border-bottom:1px solid var(--border)">Timecode OUT</td>
+            <td style="padding:4px 0;border-bottom:1px solid var(--border)">Duration</td>
+          </tr></thead>
+          <tbody>
+          ${c.timecodes.map((tc, i) => `<tr>
+            <td style="padding:5px 12px 5px 0;color:var(--muted);font-size:10px">#${i+1}</td>
+            <td style="padding:5px 12px;font-family:monospace;color:var(--fail);letter-spacing:0.02em">${tc.start}</td>
+            <td style="padding:5px 12px;font-family:monospace;color:var(--fail);letter-spacing:0.02em">${tc.end}</td>
+            <td style="padding:5px 0;color:var(--warn)">${tc.duration}</td>
           </tr>`).join('')}
+          </tbody>
         </table>
       </div>`;
     }
@@ -989,17 +1000,26 @@ async function openReport(id) {
     </div>
     ${bf && !bfUnmeasured && !bf.pass && bf.timecodes?.length ? `
     <div style="margin-top:12px;padding:12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:8px">
-      <div style="font-size:11px;font-weight:700;color:var(--fail);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">⬛ Black Frame Timecodes</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px">
-        ${bf.timecodes.map((tc,i) => `
-          <div style="display:flex;align-items:center;gap:8px;background:rgba(0,0,0,0.3);padding:6px 10px;border-radius:6px;font-size:11px">
-            <span style="color:var(--faint);min-width:20px">#${i+1}</span>
-            <span style="font-family:monospace;color:var(--fail)">${tc.start}</span>
-            <span style="color:var(--faint)">→</span>
-            <span style="font-family:monospace;color:var(--fail)">${tc.end}</span>
-            <span style="color:var(--muted);margin-left:auto">${tc.duration}</span>
-          </div>`).join('')}
+      <div style="font-size:11px;font-weight:700;color:var(--fail);margin-bottom:10px;display:flex;align-items:center;gap:8px">
+        <span>⬛ Black Frame Timecodes</span>
+        <span style="font-weight:400;color:var(--muted);font-size:10px">${bf.timecodes.length} event${bf.timecodes.length!==1?'s':''} detected</span>
       </div>
+      <table style="width:100%;font-size:11px;border-collapse:collapse">
+        <thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.05em">
+          <td style="padding:3px 10px 3px 0;border-bottom:1px solid var(--border)">#</td>
+          <td style="padding:3px 12px;border-bottom:1px solid var(--border)">Timecode IN</td>
+          <td style="padding:3px 12px;border-bottom:1px solid var(--border)">Timecode OUT</td>
+          <td style="padding:3px 0;border-bottom:1px solid var(--border)">Duration</td>
+        </tr></thead>
+        <tbody>${bf.timecodes.map((tc,i) => `
+          <tr>
+            <td style="padding:5px 10px 5px 0;color:var(--faint)">${i+1}</td>
+            <td style="padding:5px 12px;font-family:monospace;color:var(--fail);letter-spacing:0.02em">${tc.start}</td>
+            <td style="padding:5px 12px;font-family:monospace;color:var(--fail);letter-spacing:0.02em">${tc.end}</td>
+            <td style="padding:5px 0;color:var(--warn)">${tc.duration}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
     </div>` : ''}`;
 
   // File info
@@ -1143,8 +1163,19 @@ async function analyzeFile(file) {
       }
     }
 
-    setStatus('Building QC report…', 85);
-    const report = buildClientReport(file, miData);
+    setStatus('Building QC report…', 80);
+    // Attempt client-side black frame scan for browser-decodable formats
+    // MXF cannot be decoded by browsers, so this only runs for MP4/MOV/WebM etc.
+    let bfData = null;
+    if (['mp4','mov','webm','mkv','m4v'].includes(ext)) {
+      try {
+        setStatus('Scanning for black frames…', 82);
+        bfData = await detectBlackFramesBrowser(file, setStatus);
+      } catch (bfErr) { console.warn('Black frame scan failed:', bfErr); }
+    }
+
+    setStatus('Building QC report…', 90);
+    const report = buildClientReport(file, miData, bfData);
 
     setStatus('Saving…', 95);
     const jobId = 'JB_' + Math.random().toString(16).slice(2,10).toUpperCase();
@@ -1210,7 +1241,90 @@ function fmtBytes(b) {
   return (b/1e3).toFixed(1)+' KB';
 }
 
-function buildClientReport(file, miData) {
+// ── Canvas-based black frame detection (browser-decodable formats only) ──
+async function detectBlackFramesBrowser(file, setStatus) {
+  return new Promise((resolve) => {
+    const video  = document.createElement('video');
+    const canvas = document.createElement('canvas');
+    const ctx    = canvas.getContext('2d', { willReadFrequently: true });
+    const url    = URL.createObjectURL(file);
+    const BLACK_THRESHOLD = 12; // avg luma below this (0-255) = black frame
+
+    function secsToTC(s) {
+      const fps = 25;
+      const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+      const f = Math.min(fps-1, Math.floor((s%1)*fps));
+      const p = n => String(n).padStart(2,'0');
+      return `${p(h)}:${p(m)}:${p(sec)}:${p(f)}`;
+    }
+    function avgLuma() {
+      const d = ctx.getImageData(0,0,canvas.width,canvas.height).data;
+      let sum = 0;
+      // Sample every 4th pixel for speed
+      for (let i = 0; i < d.length; i += 16) sum += 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+      return sum / (d.length / 16);
+    }
+    function cleanup() { URL.revokeObjectURL(url); video.src = ''; }
+
+    const timecodes = [];
+    let blackStart = null, currentTime = 0, duration = 0, interval = 0.5;
+
+    video.onloadedmetadata = () => {
+      duration = video.duration;
+      if (!duration || !isFinite(duration)) { cleanup(); resolve(null); return; }
+      // Scale interval so we do at most 600 seeks (prevents UI hang on long files)
+      interval = Math.max(0.5, duration / 600);
+      // Downsample canvas for speed (max 320px wide)
+      const scale = Math.min(1, 320 / (video.videoWidth || 320));
+      canvas.width  = Math.round((video.videoWidth  || 320) * scale);
+      canvas.height = Math.round((video.videoHeight || 180) * scale);
+      video.currentTime = 0;
+    };
+
+    video.onseeked = () => {
+      if (!canvas.width) return;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dark = avgLuma() < BLACK_THRESHOLD;
+
+      if (dark && blackStart === null) {
+        blackStart = currentTime;
+      } else if (!dark && blackStart !== null) {
+        const dur = currentTime - blackStart;
+        if (dur >= 1/25) { // at least 1 frame
+          timecodes.push({ start: secsToTC(blackStart), end: secsToTC(currentTime),
+            startSecs: blackStart, endSecs: currentTime, duration: dur.toFixed(2)+'s' });
+        }
+        blackStart = null;
+      }
+
+      const pct = Math.round((currentTime / duration) * 8) + 82;
+      if (setStatus) setStatus(`Scanning for black frames… ${Math.round(currentTime/duration*100)}%`, pct);
+
+      currentTime += interval;
+      if (currentTime <= duration + interval * 0.1) {
+        video.currentTime = Math.min(currentTime, duration);
+      } else {
+        // Close any open black segment at end of file
+        if (blackStart !== null) {
+          const dur = duration - blackStart;
+          if (dur >= 1/25) timecodes.push({ start:secsToTC(blackStart), end:secsToTC(duration),
+            startSecs:blackStart, endSecs:duration, duration:dur.toFixed(2)+'s' });
+        }
+        cleanup();
+        resolve({ pass: timecodes.length === 0, count: timecodes.length, timecodes,
+                  measured: true, value: timecodes.length === 0 ? 'No black frames' : `${timecodes.length} black frame event${timecodes.length!==1?'s':''}`,
+                  expected: 'No black frames' });
+      }
+    };
+
+    video.onerror = () => { cleanup(); resolve(null); };
+    video.preload = 'auto';
+    video.muted   = true;
+    video.src     = url;
+  });
+}
+
+function buildClientReport(file, miData, bfData = null) {
   const tracks  = miData?.media?.track || [];
   const general = tracks.find(t => t['@type'] === 'General') || {};
   const video   = tracks.find(t => t['@type'] === 'Video')   || {};
@@ -1274,15 +1388,23 @@ function buildClientReport(file, miData) {
                    pass: !noData && audios.length===4 && trackDetails.every(t=>t.codecOk&&t.sampleOk),
                    value: `${audios.length} track${audios.length!==1?'s':''}`,
                    expected:'4 tracks: Left / Right / Left Mix Minus / Right Mix Minus', tracks:trackDetails },
-    // Loudness and black frames require FFmpeg — cannot be measured in browser
+    // Loudness requires FFmpeg — cannot be measured in browser
     loudness:    { label:'Loudness (EBU R128)', icon:'📊', measured:false, pass:null,
                    value:'Requires FFmpeg (server-side analysis)', expected:'-23 LUFS (±1 LU)' },
-    blackFrames: { label:'Black Frames',        icon:'⬛', measured:false, pass:null,
-                   count:0, timecodes:[], value:'Requires FFmpeg (server-side analysis)', expected:'No black frames' }
+    // Black frames: use canvas scan result if available, else FFmpeg required
+    blackFrames: bfData
+      ? { label:'Black Frames', icon:'⬛', measured:true, pass: bfData.pass,
+          count: bfData.count, timecodes: bfData.timecodes,
+          value: bfData.value || (bfData.pass ? 'No black frames' : `${bfData.count} event${bfData.count!==1?'s':''} detected`),
+          expected:'No black frames' }
+      : { label:'Black Frames', icon:'⬛', measured:false, pass:null,
+          count:0, timecodes:[],
+          value: ext === 'mxf' ? 'MXF not decodable in browser — use local server' : 'Requires FFmpeg (server-side analysis)',
+          expected:'No black frames' }
   };
 
-  // Score and pass/fail only from measurable checks
-  const measurable   = Object.values(checks).filter(c => c.measured);
+  // Score and pass/fail only from measurable checks (measured:true)
+  const measurable   = Object.values(checks).filter(c => c.measured === true);
   const failedChecks = measurable.filter(c => !c.pass);
   const passedChecks = measurable.filter(c =>  c.pass);
   const score        = Math.max(0, 100 - failedChecks.length * 14);
