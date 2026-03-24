@@ -469,23 +469,22 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
         </div>
         <div class="report-badges" id="rpt-badges"></div>
 
-        <div class="report-grid">
-          <div class="r-panel">
-            <div class="r-panel-title">Overall Quality Assessment</div>
-            <div class="gauge-wrap">
-              <div class="gauge-score" id="rpt-score-big">—</div>
-              <div class="gauge-bars" id="rpt-gauge-bars"></div>
+        <!-- Score + summary strip -->
+        <div class="r-panel" style="margin-bottom:14px;padding:16px 20px">
+          <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+            <div style="display:flex;align-items:baseline;gap:6px;flex-shrink:0">
+              <div class="gauge-score" id="rpt-score-big" style="font-size:38px">—</div>
+              <div style="font-size:12px;color:var(--muted);line-height:1.3">Quality<br>Score</div>
             </div>
-          </div>
-          <div class="r-panel">
-            <div class="r-panel-title">AJ360 Compliance Check</div>
-            <div id="rpt-compliance"></div>
+            <div style="width:1px;height:36px;background:var(--border);flex-shrink:0"></div>
+            <div id="rpt-gauge-bars" style="flex:1;min-width:0"></div>
           </div>
         </div>
 
-        <div class="r-panel" style="margin-bottom:14px">
-          <div class="r-panel-title">Frame Analysis</div>
-          <div class="frame-grid" id="rpt-frames"></div>
+        <!-- Compliance table (full width) -->
+        <div class="r-panel" style="margin-bottom:14px;padding:0;overflow:hidden">
+          <div class="r-panel-title" style="padding:14px 20px 12px;border-bottom:1px solid var(--border);margin:0">AJ360 Compliance Check</div>
+          <div id="rpt-compliance"></div>
         </div>
 
         <div class="report-grid">
@@ -498,6 +497,7 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
             <table class="info-table" id="rpt-audioinfo"></table>
           </div>
         </div>
+        <div id="rpt-frames" style="display:none"></div>
       </div>
 
       <!-- ── SYSTEM HEALTH ── -->
@@ -879,154 +879,138 @@ async function openReport(id) {
   scEl.textContent = sc;
   scEl.className   = 'gauge-score' + (sc >= 90 ? '' : sc >= 70 ? ' mid' : ' lo');
 
-  // Check summary bars (pass/fail per check)
+  // Check summary pills
   const checkKeys = ['format','resolution','frameRate','aspectRatio','audioCodec','sampleRate','audioTracks','loudness','blackFrames'];
-  document.getElementById('rpt-gauge-bars').innerHTML = checkKeys.map(k => {
-    const c = ch[k]; if (!c) return '';
-    const unmeasured = c.pass === null || c.measured === false;
-    const color = unmeasured ? 'var(--warn)' : c.pass ? 'var(--pass)' : 'var(--fail)';
-    const tick  = unmeasured ? '?' : c.pass ? '✓' : '✗';
-    const val   = unmeasured ? 'N/A' : (c.value || (c.pass ? 'PASS' : 'FAIL'));
-    return `<div class="g-row">
-      <div class="g-lbl" style="font-size:11px">${c.label || k}</div>
-      <div class="g-track"><div class="g-fill" style="width:100%;background:${color};opacity:${(!unmeasured&&c.pass)?0.7:1}"></div></div>
-      <div class="g-val" style="color:${color};font-size:11px">${tick} ${val}</div>
-    </div>`;
-  }).join('');
+  document.getElementById('rpt-gauge-bars').innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:6px">` +
+    checkKeys.map(k => {
+      const c = ch[k]; if (!c) return '';
+      const u = c.pass === null || c.measured === false;
+      const bg  = u ? 'rgba(245,158,11,0.12)' : c.pass ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)';
+      const col = u ? 'var(--warn)' : c.pass ? 'var(--pass)' : 'var(--fail)';
+      const brdr = u ? 'rgba(245,158,11,0.3)' : c.pass ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.3)';
+      const tick = u ? '–' : c.pass ? '✓' : '✗';
+      return `<span style="background:${bg};color:${col};border:1px solid ${brdr};padding:4px 10px;border-radius:20px;font-size:10px;font-weight:600;white-space:nowrap">${tick} ${c.label||k}</span>`;
+    }).join('') + `</div>`;
 
-  // Detailed checks panel (all checks with found vs expected + timecodes)
-  document.getElementById('rpt-compliance').innerHTML = checkKeys.map(k => {
-    const c = ch[k]; if (!c) return '';
-    const isBlack    = k === 'blackFrames';
-    const isTracks   = k === 'audioTracks';
-    const unmeasured = c.pass === null || c.measured === false;
+  // Compliance table
+  document.getElementById('rpt-compliance').innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="background:rgba(255,255,255,0.03);border-bottom:2px solid var(--border)">
+          <th style="padding:10px 14px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);font-weight:600;width:32px">#</th>
+          <th style="padding:10px 14px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);font-weight:600">Parameter</th>
+          <th style="padding:10px 14px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);font-weight:600">Required</th>
+          <th style="padding:10px 14px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);font-weight:600">Detected</th>
+          <th style="padding:10px 14px;text-align:center;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);font-weight:600;width:80px">Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${checkKeys.map((k, idx) => {
+          const c = ch[k]; if (!c) return '';
+          const u      = c.pass === null || c.measured === false;
+          const isFail = !u && !c.pass;
+          const leftBorder = isFail ? 'border-left:3px solid var(--fail)' : u ? 'border-left:3px solid var(--warn)' : 'border-left:3px solid transparent';
+          const rowBg  = isFail ? 'background:rgba(239,68,68,0.04)' : '';
+          const foundColor = u ? 'var(--muted)' : c.pass ? 'var(--pass)' : 'var(--fail)';
+          const monoKeys = ['format','resolution','frameRate','aspectRatio','audioCodec','sampleRate','loudness'];
+          const mono = monoKeys.includes(k) ? 'font-family:monospace;font-size:11px' : 'font-size:12px';
+          const badge = u
+            ? `<span style="display:inline-block;background:rgba(245,158,11,0.1);color:var(--warn);border:1px solid rgba(245,158,11,0.3);padding:3px 10px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:0.04em">N/A</span>`
+            : c.pass
+            ? `<span style="display:inline-block;background:rgba(34,197,94,0.1);color:var(--pass);border:1px solid rgba(34,197,94,0.25);padding:3px 10px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:0.04em">PASS</span>`
+            : `<span style="display:inline-block;background:rgba(239,68,68,0.1);color:var(--fail);border:1px solid rgba(239,68,68,0.25);padding:3px 10px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:0.04em">FAIL</span>`;
 
-    let detail = '';
+          // Sub-detail rows
+          let subRows = '';
 
-    // Black frames timecodes (only when actually measured and failing)
-    if (isBlack && !unmeasured && !c.pass && c.timecodes?.length) {
-      detail = `<div style="margin-top:10px;padding:12px;background:rgba(239,68,68,0.07);border-radius:8px;border:1px solid rgba(239,68,68,0.25)">
-        <div style="font-size:11px;font-weight:700;color:var(--fail);margin-bottom:8px;display:flex;align-items:center;gap:8px">
-          <span>⬛ Black Frame Timecodes</span>
-          <span style="font-weight:400;color:var(--muted)">${c.timecodes.length} event${c.timecodes.length!==1?'s':''} detected</span>
-        </div>
-        <table style="width:100%;font-size:11px;border-collapse:collapse">
-          <thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.06em">
-            <td style="padding:4px 12px 4px 0;border-bottom:1px solid var(--border)">Event</td>
-            <td style="padding:4px 12px;border-bottom:1px solid var(--border)">Timecode IN</td>
-            <td style="padding:4px 12px;border-bottom:1px solid var(--border)">Timecode OUT</td>
-            <td style="padding:4px 0;border-bottom:1px solid var(--border)">Duration</td>
-          </tr></thead>
-          <tbody>
-          ${c.timecodes.map((tc, i) => `<tr>
-            <td style="padding:5px 12px 5px 0;color:var(--muted);font-size:10px">#${i+1}</td>
-            <td style="padding:5px 12px;font-family:monospace;color:var(--fail);letter-spacing:0.02em">${tc.start}</td>
-            <td style="padding:5px 12px;font-family:monospace;color:var(--fail);letter-spacing:0.02em">${tc.end}</td>
-            <td style="padding:5px 0;color:var(--warn)">${tc.duration}</td>
-          </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>`;
-    }
-
-    // Audio tracks detail
-    if (isTracks && !unmeasured && c.tracks?.length) {
-      detail = `<div style="margin-top:8px">
-        <table style="width:100%;font-size:11px;border-collapse:collapse">
-          <tr style="color:var(--muted);font-size:10px"><td style="padding:3px 6px 3px 0">#</td><td style="padding:3px 6px">Expected</td><td style="padding:3px 6px">Codec</td><td style="padding:3px 6px">Rate</td><td style="padding:3px">Ch</td><td></td></tr>
-          ${c.tracks.map(t => {
-            const ok = t.codecOk && t.sampleOk;
-            return `<tr style="color:${ok?'var(--text)':'var(--fail)'}">
-              <td style="padding:3px 6px 3px 0;color:var(--muted)">${t.index}</td>
-              <td style="padding:3px 6px">${t.expected}</td>
-              <td style="padding:3px 6px;font-family:monospace;font-size:10px">${(t.codec||'—').toUpperCase()}</td>
-              <td style="padding:3px 6px">${t.sampleRate} Hz</td>
-              <td style="padding:3px">${t.channels}ch</td>
-              <td style="padding:3px;text-align:right">${ok?'<span style="color:var(--pass)">✓</span>':'<span style="color:var(--fail)">✗</span>'}</td>
+          if (k === 'audioTracks' && !u && c.tracks?.length) {
+            subRows = `<tr style="${rowBg};${leftBorder}">
+              <td></td>
+              <td colspan="4" style="padding:0 14px 12px 14px">
+                <table style="width:100%;border-collapse:collapse;border-radius:6px;overflow:hidden;border:1px solid var(--border)">
+                  <thead>
+                    <tr style="background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border)">
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">#</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Expected Name</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Codec</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Sample Rate</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Ch</td>
+                      <td style="padding:6px 10px;font-size:10px;text-align:center"></td>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${c.tracks.map(t => {
+                      const ok = t.codecOk && t.sampleOk;
+                      return `<tr style="border-top:1px solid rgba(255,255,255,0.04);color:${ok?'var(--text)':'var(--fail)'}">
+                        <td style="padding:7px 10px;color:var(--muted);font-size:11px">${t.index}</td>
+                        <td style="padding:7px 10px;font-size:12px">${t.label || t.expected}</td>
+                        <td style="padding:7px 10px;font-family:monospace;font-size:10px">${(t.codec||'—').toUpperCase()}</td>
+                        <td style="padding:7px 10px;font-family:monospace;font-size:11px">${t.sampleRate} Hz</td>
+                        <td style="padding:7px 10px;font-size:11px">${t.channels}ch</td>
+                        <td style="padding:7px 10px;text-align:center;font-size:13px">${ok?'<span style="color:var(--pass)">✓</span>':'<span style="color:var(--fail)">✗</span>'}</td>
+                      </tr>`;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </td>
             </tr>`;
-          }).join('')}
-        </table>
-      </div>`;
-    }
+          }
 
-    // Loudness detail when measured and failing
-    if (k === 'loudness' && !unmeasured && !c.pass) {
-      const direction = (c.lufs != null) ? (c.lufs > -22 ? '⬆ Too loud' : '⬇ Too quiet') : '';
-      detail = `<div style="margin-top:8px;padding:8px 12px;background:rgba(239,68,68,0.08);border-radius:6px;border:1px solid rgba(239,68,68,0.2);font-size:11px">
-        <div style="color:var(--fail);font-weight:600">Measured: ${c.value} ${direction}</div>
-        <div style="color:var(--muted);margin-top:2px">Target: ${c.expected} &nbsp;|&nbsp; Acceptable: −24.0 to −22.0 LUFS</div>
-      </div>`;
-    }
+          if (k === 'loudness' && !u && !c.pass) {
+            const dir = c.lufs != null ? (c.lufs > -22 ? ' — too loud' : ' — too quiet') : '';
+            subRows = `<tr style="${rowBg};${leftBorder}">
+              <td></td>
+              <td colspan="4" style="padding:0 14px 12px 14px">
+                <div style="font-size:11px;padding:8px 12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:5px">
+                  Measured: <strong style="color:var(--fail)">${c.value}${dir}</strong>
+                  &nbsp;&nbsp;·&nbsp;&nbsp;
+                  <span style="color:var(--muted)">Acceptable: −24.0 to −22.0 LUFS</span>
+                </div>
+              </td>
+            </tr>`;
+          }
 
-    const tickColor  = unmeasured ? 'var(--warn)' : c.pass ? 'var(--pass)' : 'var(--fail)';
-    const tickMark   = unmeasured ? '?' : c.pass ? '✓' : '✗';
-    const tickClass  = unmeasured ? '' : c.pass ? 'ok' : 'no';
-    const nameColor  = unmeasured ? 'var(--muted)' : c.pass ? 'var(--text)' : 'var(--fail)';
-    const valDisplay = unmeasured
-      ? `<span style="color:var(--warn);font-style:italic">${c.value || 'Not measurable in browser'}</span>`
-      : c.pass
-        ? (c.value || 'PASS')
-        : `Found: <span style="color:var(--fail)">${c.value || '—'}</span>`;
+          if (k === 'blackFrames' && !u && !c.pass && c.timecodes?.length) {
+            subRows = `<tr style="${rowBg};${leftBorder}">
+              <td></td>
+              <td colspan="4" style="padding:0 14px 12px 14px">
+                <table style="width:100%;border-collapse:collapse;border-radius:6px;overflow:hidden;border:1px solid rgba(239,68,68,0.25)">
+                  <thead>
+                    <tr style="background:rgba(239,68,68,0.08);border-bottom:1px solid rgba(239,68,68,0.2)">
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">#</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Timecode In</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Timecode Out</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Duration</td>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${c.timecodes.map((tc, i) => `<tr style="border-top:1px solid rgba(255,255,255,0.04)">
+                      <td style="padding:7px 10px;color:var(--muted);font-size:11px">${i+1}</td>
+                      <td style="padding:7px 10px;font-family:monospace;color:var(--fail);font-size:12px">${tc.start}</td>
+                      <td style="padding:7px 10px;font-family:monospace;color:var(--fail);font-size:12px">${tc.end}</td>
+                      <td style="padding:7px 10px;color:var(--warn);font-size:12px">${tc.duration}</td>
+                    </tr>`).join('')}
+                  </tbody>
+                </table>
+              </td>
+            </tr>`;
+          }
 
-    return `<div class="comp-row" style="flex-direction:column;align-items:flex-start;padding:12px 0;gap:6px;border-bottom:1px solid var(--border)">
-      <div style="display:flex;justify-content:space-between;width:100%;align-items:center;gap:12px">
-        <span style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
-          <span style="font-size:15px;flex-shrink:0">${c.icon||'●'}</span>
-          <strong style="color:${nameColor};font-size:13px">${c.label||k}</strong>
-        </span>
-        <span class="comp-tick ${tickClass}" style="flex-shrink:0;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:${unmeasured?'rgba(245,158,11,0.15)':c.pass?'rgba(34,197,94,0.15)':'rgba(239,68,68,0.15)'};color:${tickColor}">${tickMark}</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;padding-left:23px;font-size:11px">
-        <div><span style="color:var(--muted)">Found: </span>${valDisplay}</div>
-        <div style="color:var(--muted)">Expected: <span style="color:var(--text)">${c.expected||'—'}</span></div>
-      </div>
-      ${detail}
-    </div>`;
-  }).join('');
-
-  // Frame analysis summary card
-  const bf = ch.blackFrames;
-  const bfUnmeasured = bf?.pass === null || bf?.measured === false;
-  const bfCount = bfUnmeasured ? '?' : (bf?.count ?? 0);
-  const bfGood  = !bfUnmeasured && (bf?.count ?? 0) === 0;
-  document.getElementById('rpt-frames').innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
-      <div class="frame-cell">
-        <div class="frame-val ${bfGood?'good':''}" style="color:${bfUnmeasured?'var(--warn)':''}">${bfCount}</div>
-        <div class="frame-lbl">Black Frame Events${bfUnmeasured?'<br><span style="color:var(--warn);font-size:9px">(not scanned — FFmpeg required)</span>':''}</div>
-      </div>
-      <div class="frame-cell">
-        <div class="frame-val ${ch.frameRate?.measured===false?'':ch.frameRate?.pass?'good':'lo'}">${ch.frameRate?.value || '—'}</div>
-        <div class="frame-lbl">Frame Rate<br><span style="color:var(--faint);font-size:9px">Required: 25 fps</span></div>
-      </div>
-      <div class="frame-cell">
-        <div class="frame-val ${ch.resolution?.measured===false?'':ch.resolution?.pass?'good':'lo'}" style="font-size:16px">${ch.resolution?.value || '—'}</div>
-        <div class="frame-lbl">Resolution<br><span style="color:var(--faint);font-size:9px">Required: 3840×2160</span></div>
-      </div>
-    </div>
-    ${bf && !bfUnmeasured && !bf.pass && bf.timecodes?.length ? `
-    <div style="margin-top:12px;padding:12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:8px">
-      <div style="font-size:11px;font-weight:700;color:var(--fail);margin-bottom:10px;display:flex;align-items:center;gap:8px">
-        <span>⬛ Black Frame Timecodes</span>
-        <span style="font-weight:400;color:var(--muted);font-size:10px">${bf.timecodes.length} event${bf.timecodes.length!==1?'s':''} detected</span>
-      </div>
-      <table style="width:100%;font-size:11px;border-collapse:collapse">
-        <thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.05em">
-          <td style="padding:3px 10px 3px 0;border-bottom:1px solid var(--border)">#</td>
-          <td style="padding:3px 12px;border-bottom:1px solid var(--border)">Timecode IN</td>
-          <td style="padding:3px 12px;border-bottom:1px solid var(--border)">Timecode OUT</td>
-          <td style="padding:3px 0;border-bottom:1px solid var(--border)">Duration</td>
-        </tr></thead>
-        <tbody>${bf.timecodes.map((tc,i) => `
-          <tr>
-            <td style="padding:5px 10px 5px 0;color:var(--faint)">${i+1}</td>
-            <td style="padding:5px 12px;font-family:monospace;color:var(--fail);letter-spacing:0.02em">${tc.start}</td>
-            <td style="padding:5px 12px;font-family:monospace;color:var(--fail);letter-spacing:0.02em">${tc.end}</td>
-            <td style="padding:5px 0;color:var(--warn)">${tc.duration}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>` : ''}`;
+          return `<tr style="border-bottom:1px solid var(--border);${leftBorder};${rowBg}">
+            <td style="padding:12px 14px;color:var(--faint);font-size:11px">${idx+1}</td>
+            <td style="padding:12px 14px">
+              <span style="display:flex;align-items:center;gap:9px">
+                <span style="font-size:15px;flex-shrink:0">${c.icon||'●'}</span>
+                <span style="font-size:13px;font-weight:600;color:${isFail?'var(--fail)':u?'var(--muted)':'var(--text)'}">${c.label||k}</span>
+              </span>
+            </td>
+            <td style="padding:12px 14px;font-size:12px;color:var(--muted)">${c.expected||'—'}</td>
+            <td style="padding:12px 14px;${mono};color:${foundColor}">${c.value||'—'}</td>
+            <td style="padding:12px 14px;text-align:center">${badge}</td>
+          </tr>${subRows}`;
+        }).join('')}
+      </tbody>
+    </table>`;
 
   // File info
   document.getElementById('rpt-fileinfo').innerHTML = tableRows([
@@ -1254,8 +1238,13 @@ function fmtBytes(b) {
 async function measureLoudnessBrowser(file, setStatus) {
   const ext       = file.name.split('.').pop().toLowerCase();
   const DECODABLE = ['mp4','mov','m4v','webm','wav','mp3','aac','m4a','ogg','flac','mkv'];
-  if (!DECODABLE.includes(ext))               return null; // MXF etc. not decodable
-  if (file.size > 200 * 1024 * 1024)          return null; // > 200 MB — too large
+  if (!DECODABLE.includes(ext)) return null; // MXF etc. not decodable
+  const MB = file.size / (1024 * 1024);
+  if (MB > 500) return {
+    measured: false, pass: null,
+    value: `File too large (${MB.toFixed(0)} MB) — upload a clip under 500 MB`,
+    expected: '-23 LUFS (±1 LU)'
+  };
 
   try {
     if (setStatus) setStatus('Measuring loudness…', 87);
@@ -1271,9 +1260,13 @@ async function measureLoudnessBrowser(file, setStatus) {
     let audioBuffer;
     try {
       audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    } catch {
+    } catch (decErr) {
       await audioCtx.close();
-      return null; // File not decodable by this browser
+      return {
+        measured: false, pass: null,
+        value: 'Audio codec not decodable in browser — try WAV, MP3 or AAC',
+        expected: '-23 LUFS (±1 LU)'
+      };
     }
 
     // K-weighted loudness via OfflineAudioContext
@@ -1510,16 +1503,16 @@ function buildClientReport(file, miData, bfData = null, loudData = null) {
                    pass: !noData && audios.length===4 && trackDetails.every(t=>t.codecOk&&t.sampleOk),
                    value: `${audios.length} track${audios.length!==1?'s':''}`,
                    expected:'4 tracks: Left / Right / Left Mix Minus / Right Mix Minus', tracks:trackDetails },
-    // Loudness: use Web Audio API result if available, else N/A
-    loudness: loudData
+    // Loudness: use Web Audio API result if successfully measured, else N/A
+    loudness: (loudData && loudData.measured !== false)
       ? { label:'Loudness (EBU R128)', icon:'📊', measured:true,
           pass: loudData.pass, value: loudData.value,
           lufs: loudData.lufs, truePeak: loudData.truePeak, lra: loudData.lra,
           expected:'-23 LUFS (±1 LU)' }
       : { label:'Loudness (EBU R128)', icon:'📊', measured:false, pass:null,
-          value: ext==='mxf' ? 'MXF not decodable in browser — use local server'
-                             : file.size > 200*1024*1024 ? 'File too large for browser analysis (>200 MB)'
-                             : 'Requires server-side FFmpeg',
+          value: loudData?.value
+              || (ext==='mxf' ? 'MXF not decodable in browser — use server-side analysis'
+                 : 'Could not measure loudness in browser'),
           expected:'-23 LUFS (±1 LU)' },
     // Black frames: use canvas scan result if available, else FFmpeg required
     blackFrames: bfData
