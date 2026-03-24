@@ -85,7 +85,10 @@ export default async function handler(req, res) {
   // slug is ['login'], ['jobs'], ['jobs','JB_123'], ['admin','users'], etc.
   const slug   = Array.isArray(req.query.slug) ? req.query.slug : [req.query.slug].filter(Boolean);
   const method = req.method;
-  const body   = req.body || {};
+  // Parse body — Vercel auto-parses JSON but guard against edge cases
+  let body = req.body;
+  if (typeof body === 'string') { try { body = JSON.parse(body); } catch { body = {}; } }
+  if (!body || typeof body !== 'object') body = {};
 
   // ── POST /api/login ────────────────────────────────────────
   if (method === 'POST' && slug[0] === 'login') {
