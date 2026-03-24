@@ -261,6 +261,7 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
   .frame-cell{border:1px solid #ccc!important;background:#fff!important}
 }
 </style>
+<script src="/lib/mediainfo/mediainfo.min.js"></script>
 </head>
 <body>
 <div id="app">
@@ -1133,16 +1134,12 @@ async function analyzeFile(file) {
     let miData = null;
 
     // ── Try MediaInfo.js (WebAssembly) ──────────────────────
-    setStatus('Loading analysis engine…', 5);
+    setStatus('Scanning file structure…', 10);
     try {
-      await loadScript('https://cdn.jsdelivr.net/npm/mediainfo.js@0.2.1/dist/mediainfo.min.js');
-      setStatus('Scanning file structure…', 20);
-
-      const mi = await new Promise((resolve, reject) => {
-        window.MediaInfo(
-          { format: 'JSON', locateFile: (path) => `https://cdn.jsdelivr.net/npm/mediainfo.js@0.2.1/dist/${path}` },
-          resolve, reject
-        );
+      const miFactory = (window.MediaInfo && window.MediaInfo.default) || window.MediaInfo;
+      const mi = await miFactory({
+        format: 'JSON',
+        locateFile: () => '/lib/mediainfo/MediaInfoModule.wasm'
       });
 
       setStatus('Extracting metadata…', 50);
