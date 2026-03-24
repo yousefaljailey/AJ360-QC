@@ -948,9 +948,13 @@ async function openReport(id) {
       </div>`;
     }
 
-    // Loudness note (only when measured)
+    // Loudness detail when measured and failing
     if (k === 'loudness' && !unmeasured && !c.pass) {
-      detail = `<div style="margin-top:6px;font-size:11px;color:var(--fail)">Measured: ${c.value} — Target: ${c.expected}</div>`;
+      const direction = (c.lufs != null) ? (c.lufs > -22 ? '⬆ Too loud' : '⬇ Too quiet') : '';
+      detail = `<div style="margin-top:8px;padding:8px 12px;background:rgba(239,68,68,0.08);border-radius:6px;border:1px solid rgba(239,68,68,0.2);font-size:11px">
+        <div style="color:var(--fail);font-weight:600">Measured: ${c.value} ${direction}</div>
+        <div style="color:var(--muted);margin-top:2px">Target: ${c.expected} &nbsp;|&nbsp; Acceptable: −24.0 to −22.0 LUFS</div>
+      </div>`;
     }
 
     const tickColor  = unmeasured ? 'var(--warn)' : c.pass ? 'var(--pass)' : 'var(--fail)';
@@ -1174,8 +1178,14 @@ async function analyzeFile(file) {
       } catch (bfErr) { console.warn('Black frame scan failed:', bfErr); }
     }
 
-    setStatus('Building QC report…', 90);
-    const report = buildClientReport(file, miData, bfData);
+    // Attempt loudness measurement for small browser-decodable files
+    let loudData = null;
+    try {
+      loudData = await measureLoudnessBrowser(file, setStatus);
+    } catch (lErr) { console.warn('Loudness measurement error:', lErr); }
+
+    setStatus('Building QC report…', 92);
+    const report = buildClientReport(file, miData, bfData, loudData);
 
     setStatus('Saving…', 95);
     const jobId = 'JB_' + Math.random().toString(16).slice(2,10).toUpperCase();
@@ -1239,6 +1249,94 @@ function fmtBytes(b) {
   if (b > 1e9)  return (b/1e9).toFixed(1)+' GB';
   if (b > 1e6)  return (b/1e6).toFixed(1)+' MB';
   return (b/1e3).toFixed(1)+' KB';
+}
+
+// ── Web Audio API loudness measurement (ITU-R BS.1770 / EBU R128) ──────
+// Only runs for browser-decodable formats & files under 200 MB
+async function measureLoudnessBrowser(file, setStatus) {
+  const ext       = file.name.split('.').pop().toLowerCase();
+  const DECODABLE = ['mp4','mov','m4v','webm','wav','mp3','aac','m4a','ogg','flac','mkv'];
+  if (!DECODABLE.includes(ext))               return null; // MXF etc. not decodable
+  if (file.size > 200 * 1024 * 1024)          return null; // > 200 MB — too large
+
+  try {
+    if (setStatus) setStatus('Measuring loudness…', 87);
+
+    const arrayBuffer = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload  = e => resolve(e.target.result);
+      reader.onerror = () => reject(new Error('FileReader error'));
+      reader.readAsArrayBuffer(file);
+    });
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    let audioBuffer;
+    try {
+      audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    } catch {
+      await audioCtx.close();
+      return null; // File not decodable by this browser
+    }
+
+    // K-weighted loudness via OfflineAudioContext
+    const numCh      = Math.min(audioBuffer.numberOfChannels, 5);
+    const offlineCtx = new OfflineAudioContext(numCh, audioBuffer.length, audioBuffer.sampleRate);
+    const src        = offlineCtx.createBufferSource();
+    src.buffer       = audioBuffer;
+
+    // Stage 1: High-shelf pre-filter (+4 dB at 1500 Hz — head acoustics)
+    const shelf      = offlineCtx.createBiquadFilter();
+    shelf.type       = 'highshelf';
+    shelf.frequency.value = 1500;
+    shelf.gain.value      = 4.0;
+
+    // Stage 2: High-pass filter at 38 Hz (remove DC / sub-bass)
+    const hp         = offlineCtx.createBiquadFilter();
+    hp.type          = 'highpass';
+    hp.frequency.value = 38;
+    hp.Q.value         = 0.5;
+
+    src.connect(shelf);
+    shelf.connect(hp);
+    hp.connect(offlineCtx.destination);
+    src.start(0);
+
+    const rendered   = await offlineCtx.startRendering();
+    await audioCtx.close();
+
+    // Channel weights per ITU-R BS.1770: L/R/C = 1.0, LFE = 0, Ls/Rs = 1.41
+    const chWeights  = [1.0, 1.0, 1.0, 1.41, 1.41];
+    let   weightedMs = 0, totalWeight = 0;
+    for (let c = 0; c < rendered.numberOfChannels; c++) {
+      const w    = chWeights[c] ?? 1.0;
+      const data = rendered.getChannelData(c);
+      let ms = 0;
+      for (let i = 0; i < data.length; i++) ms += data[i] * data[i];
+      ms /= data.length;
+      weightedMs += w * ms;
+      totalWeight += w;
+    }
+    if (totalWeight > 0) weightedMs /= totalWeight;
+
+    const lufs   = -0.691 + 10 * Math.log10(weightedMs);
+    const valid  = isFinite(lufs) && lufs > -80;
+    const value  = valid ? `${lufs.toFixed(1)} LUFS` : '—';
+    const pass   = valid ? (lufs >= -24.0 && lufs <= -22.0) : false;
+
+    // Rough true peak (sample peak — not inter-sample)
+    let peak = 0;
+    for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+      const d = audioBuffer.getChannelData(c);
+      for (let i = 0; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; }
+    }
+    const truePeakDb = peak > 0 ? (20 * Math.log10(peak)).toFixed(1) + ' dBFS' : '—';
+
+    return { measured: true, pass, value, lufs: valid ? lufs : null,
+             expected: '-23 LUFS (±1 LU)', truePeak: truePeakDb, lra: '—' };
+  } catch (e) {
+    console.warn('Loudness measurement failed:', e);
+    return null;
+  }
 }
 
 // ── Canvas-based black frame detection (browser-decodable formats only) ──
@@ -1324,11 +1422,11 @@ async function detectBlackFramesBrowser(file, setStatus) {
   });
 }
 
-function buildClientReport(file, miData, bfData = null) {
+function buildClientReport(file, miData, bfData = null, loudData = null) {
   const tracks  = miData?.media?.track || [];
-  const general = tracks.find(t => t['@type'] === 'General') || {};
-  const video   = tracks.find(t => t['@type'] === 'Video')   || {};
-  const audios  = tracks.filter(t => t['@type'] === 'Audio');
+  const general = tracks.find(t => (t['@type']||'').toLowerCase() === 'general') || {};
+  const video   = tracks.find(t => (t['@type']||'').toLowerCase() === 'video')   || {};
+  const audios  = tracks.filter(t => (t['@type']||'').toLowerCase() === 'audio');
   const ext     = file.name.split('.').pop().toLowerCase();
 
   const width  = parseInt(video.Width  || 0);
@@ -1341,28 +1439,42 @@ function buildClientReport(file, miData, bfData = null) {
   const arStr = video.DisplayAspectRatio_Original || video.DisplayAspectRatio || calcAR(width, height);
 
   // PCM 24-bit: require PCM format AND 24-bit depth
+  // MXF audio CodecID can be hex (e.g. "04030301") — rely on Format field
   const isPCM24 = (a) => {
-    const fmt = (a.Format || a.CodecID || '').toLowerCase();
-    const isPCMFmt = /pcm/.test(fmt) || /sowt|twos/.test(fmt);
+    const fmt      = (a.Format || '').toLowerCase();
+    const codecId  = (a.CodecID || '').toLowerCase();
+    const fmtInfo  = (a.Format_Info || '').toLowerCase();
+    // Detect PCM format: "PCM", "PCM Little Endian", "Pulse Code Modulation", etc.
+    const isPCMFmt = /pcm/.test(fmt) || /pulse code/i.test(fmtInfo)
+                  || /sowt|twos/.test(codecId)           // QuickTime PCM variants
+                  || /pcm_s24|pcm24|pcm16/.test(codecId);
     if (!isPCMFmt) return false;
-    const bitDepth = parseInt(a.BitDepth || 0);
-    if (bitDepth > 0) return bitDepth === 24;          // MediaInfo reported depth
-    return /pcm_s24|pcm24/.test(fmt);                  // codec name fallback
+    // Check bit depth — prefer BitDepth field, fall back to codec string
+    const bd = parseInt(a.BitDepth || a.Bit_depth || 0);
+    if (bd > 0) return bd === 24;
+    return /pcm_s24|24/i.test(codecId) || /24.bit/i.test(fmtInfo);
   };
+  const getSampleRate = (a) =>
+    parseInt(a.SamplingRate || a.Sampling_rate || a.Audio_SamplingRate || 0);
   const getPCMLabel = (a) => {
     const base = (a.Format || a.CodecID || '—').toUpperCase();
-    return a.BitDepth ? `${base} ${a.BitDepth}-bit` : base;
+    const bd   = a.BitDepth || a.Bit_depth;
+    return bd ? `${base} ${bd}-bit` : base;
   };
 
   const expLabels = ['Left','Right','Left Mix Minus','Right Mix Minus'];
   const trackDetails = audios.map((a, i) => {
+    const sr       = getSampleRate(a);
     const codecOk  = isPCM24(a);
-    const sampleOk = parseInt(a.SamplingRate || 0) === 48000;
+    const sampleOk = sr === 48000;
     return {
       index: i+1, label: a.Title || expLabels[i] || `Track ${i+1}`,
-      expected: expLabels[i] || '—', codec: (a.Format || a.CodecID || '—').toLowerCase(),
-      sampleRate: a.SamplingRate || '—', channels: parseInt(a.Channels||1),
-      layout: a.ChannelLayout||'mono', codecOk, sampleOk
+      expected: expLabels[i] || '—',
+      codec: (a.Format || a.CodecID || '—').toLowerCase(),
+      sampleRate: sr || a.SamplingRate || '—',
+      channels: parseInt(a.Channels || a.Channel_s || 1),
+      layout: a.ChannelLayout || a.Channel_layout || 'mono',
+      codecOk, sampleOk
     };
   });
 
@@ -1382,15 +1494,23 @@ function buildClientReport(file, miData, bfData = null) {
                    pass: !noData && audios.length>0 && audios.every(isPCM24),
                    value: audios.length ? getPCMLabel(audios[0]) : 'None', expected:'PCM 24-bit (pcm_s24le)' },
     sampleRate:  { label:'Sample Rate',         icon:'〰', measured:!noData,
-                   pass: !noData && audios.length>0 && audios.every(a=>parseInt(a.SamplingRate||0)===48000),
-                   value: audios.length?(audios[0].SamplingRate||'—')+' Hz':'—', expected:'48,000 Hz' },
+                   pass: !noData && audios.length>0 && audios.every(a=>getSampleRate(a)===48000),
+                   value: audios.length ? (getSampleRate(audios[0])||'—')+' Hz' : '—', expected:'48,000 Hz' },
     audioTracks: { label:'Audio Tracks',        icon:'🎚', measured:!noData,
                    pass: !noData && audios.length===4 && trackDetails.every(t=>t.codecOk&&t.sampleOk),
                    value: `${audios.length} track${audios.length!==1?'s':''}`,
                    expected:'4 tracks: Left / Right / Left Mix Minus / Right Mix Minus', tracks:trackDetails },
-    // Loudness requires FFmpeg — cannot be measured in browser
-    loudness:    { label:'Loudness (EBU R128)', icon:'📊', measured:false, pass:null,
-                   value:'Requires FFmpeg (server-side analysis)', expected:'-23 LUFS (±1 LU)' },
+    // Loudness: use Web Audio API result if available, else N/A
+    loudness: loudData
+      ? { label:'Loudness (EBU R128)', icon:'📊', measured:true,
+          pass: loudData.pass, value: loudData.value,
+          lufs: loudData.lufs, truePeak: loudData.truePeak, lra: loudData.lra,
+          expected:'-23 LUFS (±1 LU)' }
+      : { label:'Loudness (EBU R128)', icon:'📊', measured:false, pass:null,
+          value: ext==='mxf' ? 'MXF not decodable in browser — use local server'
+                             : file.size > 200*1024*1024 ? 'File too large for browser analysis (>200 MB)'
+                             : 'Requires server-side FFmpeg',
+          expected:'-23 LUFS (±1 LU)' },
     // Black frames: use canvas scan result if available, else FFmpeg required
     blackFrames: bfData
       ? { label:'Black Frames', icon:'⬛', measured:true, pass: bfData.pass,
@@ -1426,9 +1546,11 @@ function buildClientReport(file, miData, bfData = null) {
     },
     audioInfo: {
       codec: audios.length ? getPCMLabel(audios[0]) : '—',
-      sampleRate: audios.length?(audios[0].SamplingRate||'—')+' Hz':'—',
+      sampleRate: audios.length ? (getSampleRate(audios[0]) || '—') + ' Hz' : '—',
       channels: audios.length, tracks: trackDetails,
-      loudness:'Not measured (requires FFmpeg)', truePeak:'Not measured', lra:'Not measured'
+      loudness:  loudData?.value    || 'Not measured (requires FFmpeg)',
+      truePeak:  loudData?.truePeak || 'Not measured',
+      lra:       loudData?.lra      || 'Not measured'
     }
   };
 }

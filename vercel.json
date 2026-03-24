@@ -5,15 +5,6 @@
       "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true"
     }
   },
-  "headers": [
-    {
-      "source": "/app",
-      "headers": [
-        { "key": "Cross-Origin-Embedder-Policy", "value": "require-corp" },
-        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" }
-      ]
-    }
-  ],
   "rewrites": [
     { "source": "/app", "destination": "/app.html" }
   ]
