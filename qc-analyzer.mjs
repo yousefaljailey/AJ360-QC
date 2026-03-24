@@ -223,7 +223,7 @@ export async function analyzeFile(filePath, originalFilename) {
     },
     audioTracks: {
       label:    'Audio Tracks',
-      pass:     audioStreams.length === 4,
+      pass:     audioStreams.length === 4 && trackDetails.every(t => t.codecOk && t.sampleOk),
       value:    `${audioStreams.length} track${audioStreams.length !== 1 ? 's' : ''}`,
       expected: '4 tracks: Left / Right / Left Mix Minus / Right Mix Minus',
       tracks:   trackDetails,
