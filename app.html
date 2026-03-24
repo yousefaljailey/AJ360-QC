@@ -577,17 +577,29 @@ function showView(v) {
 
 // ── Data fetch ──
 async function api(url, opts = {}) {
-  const res = await fetch(url, {
-    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', ...opts.headers },
-    ...opts
-  });
-  if (res.status === 401) { signOut(); return null; }
-  return res.json();
+  try {
+    const res = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', ...opts.headers },
+      ...opts
+    });
+    if (res.status === 401) { signOut(); return null; }
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('json')) {
+      console.error('Non-JSON response from', url, res.status);
+      return null;
+    }
+    const data = await res.json();
+    if (!res.ok) { console.error('API error', url, data); return null; }
+    return data;
+  } catch (err) {
+    console.error('Fetch failed', url, err);
+    return null;
+  }
 }
 
 async function loadJobs() {
   const data = await api('/api/jobs');
-  if (!data) return;
+  if (!Array.isArray(data)) return;
   allJobs = data;
   updateTopbar();
   renderDashboard();
@@ -942,44 +954,238 @@ function closeUploadModal() {
 }
 function dragOver(e)  { e.preventDefault(); document.getElementById('dropZone').classList.add('drag'); }
 function dragLeave()  { document.getElementById('dropZone').classList.remove('drag'); }
-function dropFile(e)  { e.preventDefault(); dragLeave(); uploadFile(e.dataTransfer.files[0]); }
-function handleFileSelect(e) { uploadFile(e.target.files[0]); }
+function dropFile(e)  { e.preventDefault(); dragLeave(); analyzeFile(e.dataTransfer.files[0]); }
+function handleFileSelect(e) { analyzeFile(e.target.files[0]); }
 
-async function uploadFile(file) {
+// ── Client-side QC using MediaInfo.js ──────────────────────────
+async function analyzeFile(file) {
   if (!file) return;
   document.getElementById('dropZone').style.display = 'none';
   const prog = document.getElementById('uploadProgress');
   prog.style.display = 'block';
   document.getElementById('upFilename').textContent = file.name;
-  document.getElementById('upStatus').textContent   = 'Uploading…';
+  document.getElementById('upStatus').textContent = 'Reading file metadata…';
+  document.getElementById('upFill').style.width = '10%';
 
-  // Animate progress bar
-  let pct = 0;
-  const interval = setInterval(() => {
-    pct = Math.min(pct + Math.random() * 15, 90);
-    document.getElementById('upFill').style.width = pct + '%';
-  }, 200);
-
-  const form = new FormData();
-  form.append('file', file);
   try {
-    const res = await fetch('/api/jobs/upload', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + token },
-      body: form
-    });
-    clearInterval(interval);
-    document.getElementById('upFill').style.width = '100%';
-    if (res.ok) {
-      document.getElementById('upStatus').textContent = '✓ Uploaded — QC analysis starting…';
-      setTimeout(() => { closeUploadModal(); showView('queue'); loadJobs(); }, 1500);
-    } else {
-      document.getElementById('upStatus').textContent = '✗ Upload failed';
+    // Load MediaInfo.js from CDN if not already loaded
+    if (!window.MediaInfo) {
+      document.getElementById('upStatus').textContent = 'Loading analysis engine…';
+      await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/mediainfo.js@0.2.1/dist/mediainfo.min.js';
+        s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
     }
+
+    document.getElementById('upStatus').textContent = 'Scanning file structure…';
+    document.getElementById('upFill').style.width = '30%';
+
+    const mi = await new Promise((resolve, reject) => {
+      window.MediaInfo({ format: 'JSON', chunkSize: 512 * 1024 }, resolve, reject);
+    });
+
+    const result = await mi.analyzeData(
+      () => file.size,
+      (chunkSize, offset) => new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onload = e => resolve(new Uint8Array(e.target.result));
+        reader.readAsArrayBuffer(file.slice(offset, offset + chunkSize));
+      })
+    );
+
+    mi.close();
+    document.getElementById('upFill').style.width = '80%';
+    document.getElementById('upStatus').textContent = 'Building QC report…';
+
+    const report = buildClientReport(file, JSON.parse(result));
+
+    document.getElementById('upFill').style.width = '100%';
+    document.getElementById('upStatus').textContent = '✓ Analysis complete';
+
+    // Save to jobs list via API
+    const jobId = 'JB_' + Math.random().toString(16).slice(2,10).toUpperCase();
+    const job = {
+      id: jobId,
+      filename: file.name,
+      duration: report.fileInfo.duration || '—',
+      size: formatBytes(file.size),
+      resolution: report.fileInfo.resolution || '—',
+      format: report.fileInfo.format || file.name.split('.').pop().toUpperCase(),
+      status: 'completed',
+      score: report.score,
+      aj360Pass: report.overallPass,
+      uploadedAt: new Date().toISOString(),
+      uploadedBy: user.email,
+      report
+    };
+
+    await api('/api/jobs/client-upload', {
+      method: 'POST',
+      body: JSON.stringify({ job })
+    });
+
+    setTimeout(() => {
+      closeUploadModal();
+      loadJobs().then(() => {
+        openReport(jobId);
+      });
+    }, 800);
+
   } catch (err) {
-    clearInterval(interval);
-    document.getElementById('upStatus').textContent = '✗ Error: ' + err.message;
+    console.error('Analysis error:', err);
+    document.getElementById('upStatus').textContent = '✗ Analysis failed: ' + err.message;
+    document.getElementById('upFill').style.width = '0%';
   }
+}
+
+function formatBytes(b) {
+  if (b > 1e12) return (b/1e12).toFixed(1) + ' TB';
+  if (b > 1e9)  return (b/1e9).toFixed(1) + ' GB';
+  if (b > 1e6)  return (b/1e6).toFixed(1) + ' MB';
+  return (b/1e3).toFixed(1) + ' KB';
+}
+
+function buildClientReport(file, miResult) {
+  const tracks = miResult?.media?.track || [];
+  const general = tracks.find(t => t['@type'] === 'General') || {};
+  const video   = tracks.find(t => t['@type'] === 'Video') || {};
+  const audios  = tracks.filter(t => t['@type'] === 'Audio');
+
+  const ext = file.name.split('.').pop().toLowerCase();
+
+  // ── Video checks ─────────────────────────────────────────
+  const width  = parseInt(video.Width  || 0);
+  const height = parseInt(video.Height || 0);
+  const fpsRaw = parseFloat(video.FrameRate || video.FrameRate_Original || 0);
+  const codec  = (video.Format || '').toLowerCase();
+  const arW    = parseInt(video.DisplayAspectRatio_Original?.split(':')[0] || video.DisplayAspectRatio?.split(':')[0] || width);
+  const arH    = parseInt(video.DisplayAspectRatio_Original?.split(':')[1] || video.DisplayAspectRatio?.split(':')[1] || height);
+  const arStr  = video.DisplayAspectRatio_Original || video.DisplayAspectRatio ||
+                 (width && height ? simplifyAR(width, height) : '—');
+
+  function simplifyAR(w, h) {
+    const g = (a, b) => b ? g(b, a % b) : a;
+    const d = g(w, h);
+    return `${w/d}:${h/d}`;
+  }
+
+  const fmtCheck = {
+    label: 'File Format', icon: '📄',
+    pass: ext === 'mxf',
+    value: ext.toUpperCase(), expected: 'MXF'
+  };
+  const resCheck = {
+    label: 'Resolution', icon: '🖥',
+    pass: width === 3840 && height === 2160,
+    value: width && height ? `${width}x${height}` : '—',
+    expected: '3840×2160 (UHD)'
+  };
+  const fpsCheck = {
+    label: 'Frame Rate', icon: '🎞',
+    pass: Math.abs(fpsRaw - 25) < 0.1,
+    value: fpsRaw ? `${fpsRaw.toFixed(2)} fps` : '—',
+    expected: '25 fps'
+  };
+  const arCheck = {
+    label: 'Aspect Ratio', icon: '📐',
+    pass: arStr === '16:9',
+    value: arStr, expected: '16:9'
+  };
+
+  // ── Audio checks ─────────────────────────────────────────
+  const isPCM24 = s => ['PCM','pcm_s24le','pcm_s24be','pcm_s24'].some(x => (s||'').toLowerCase().includes(x.toLowerCase()));
+  const expectedLabels = ['Left','Right','Left Mix Minus','Right Mix Minus'];
+
+  const trackDetails = audios.map((a, i) => {
+    const codecOk  = isPCM24(a.Format || a.CodecID || '');
+    const sampleOk = parseInt(a.SamplingRate || 0) === 48000;
+    return {
+      index: i+1,
+      label: a.Title || expectedLabels[i] || `Track ${i+1}`,
+      expected: expectedLabels[i] || '—',
+      codec: (a.Format || a.CodecID || '—').toLowerCase(),
+      sampleRate: a.SamplingRate || '—',
+      channels: parseInt(a.Channels || 1),
+      layout: a.ChannelLayout || 'mono',
+      codecOk, sampleOk
+    };
+  });
+
+  const codecCheck = {
+    label: 'Audio Codec', icon: '🔊',
+    pass: audios.length > 0 && audios.every(a => isPCM24(a.Format || a.CodecID || '')),
+    value: audios.length ? (audios[0].Format || audios[0].CodecID || '—').toUpperCase() : 'None',
+    expected: 'PCM 24-bit (pcm_s24le)'
+  };
+  const srCheck = {
+    label: 'Sample Rate', icon: '〰',
+    pass: audios.length > 0 && audios.every(a => parseInt(a.SamplingRate||0) === 48000),
+    value: audios.length ? (audios[0].SamplingRate + ' Hz') : '—',
+    expected: '48,000 Hz'
+  };
+  const tracksCheck = {
+    label: 'Audio Tracks', icon: '🎚',
+    pass: audios.length === 4 && trackDetails.every(t => t.codecOk && t.sampleOk),
+    value: `${audios.length} track${audios.length !== 1 ? 's' : ''}`,
+    expected: '4 tracks: Left / Right / Left Mix Minus / Right Mix Minus',
+    tracks: trackDetails
+  };
+
+  // ── Loudness & Black Frames (require server) ──────────────
+  const loudCheck = {
+    label: 'Loudness (EBU R128)', icon: '📊',
+    pass: false,
+    value: 'Not measured',
+    expected: '-23 LUFS (±1 LU)',
+    note: 'Requires server-side analysis with ffmpeg'
+  };
+  const bfCheck = {
+    label: 'Black Frames', icon: '⬛',
+    pass: false,
+    count: 0,
+    timecodes: [],
+    expected: 'No black frames',
+    value: 'Not scanned',
+    note: 'Requires server-side analysis with ffmpeg'
+  };
+
+  // ── Score ─────────────────────────────────────────────────
+  const checks = { format: fmtCheck, resolution: resCheck, frameRate: fpsCheck,
+                   aspectRatio: arCheck, audioCodec: codecCheck, sampleRate: srCheck,
+                   audioTracks: tracksCheck, loudness: loudCheck, blackFrames: bfCheck };
+  const failed = Object.values(checks).filter(c => !c.pass).length;
+  const passed = Object.values(checks).filter(c =>  c.pass).length;
+  const score  = Math.max(0, 100 - failed * 11);
+  const overallPass = failed === 0;
+
+  // Duration from general track
+  const durSecs = parseFloat(general.Duration || 0) / 1000;
+  const durFmt  = durSecs > 0 ? new Date(durSecs*1000).toISOString().slice(11,19).replace(/^00:/,'') : '—';
+
+  return {
+    checks, overallPass, aj360Pass: overallPass,
+    score, passedCount: passed, failedCount: failed,
+    fileInfo: {
+      format: ext.toUpperCase(),
+      fileSize: formatBytes(file.size),
+      resolution: width && height ? `${width}x${height}` : '—',
+      videoCodec: (video.Format || video.CodecID || '—').toUpperCase(),
+      bitRate: general.OverallBitRate ? Math.round(parseInt(general.OverallBitRate)/1000000) + ' Mbps' : '—',
+      duration: durFmt,
+      frameRate: fpsRaw ? `${fpsRaw.toFixed(2)} fps` : '—'
+    },
+    audioInfo: {
+      codec: audios.length ? (audios[0].Format || audios[0].CodecID || '—').toUpperCase() : '—',
+      sampleRate: audios.length ? audios[0].SamplingRate + ' Hz' : '—',
+      channels: audios.length,
+      tracks: trackDetails,
+      loudness: 'Not measured',
+      truePeak: 'Not measured',
+      lra: 'Not measured'
+    }
+  };
 }
 
 // ── Download helpers ──

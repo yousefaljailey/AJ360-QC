@@ -80,6 +80,7 @@ function resultPage(icon, heading, body) {
 
 // ── Main handler ──────────────────────────────────────────────
 export default async function handler(req, res) {
+  try {
   ensureAdmin();
 
   // slug is ['login'], ['jobs'], ['jobs','JB_123'], ['admin','users'], etc.
@@ -227,9 +228,19 @@ export default async function handler(req, res) {
     })));
   }
 
-  // ── POST /api/jobs/upload ──────────────────────────────────
+  // ── POST /api/jobs/upload (server-side — not supported on Vercel) ──
   if (method === 'POST' && slug[0] === 'jobs' && slug[1] === 'upload') {
-    return res.status(501).json({ error: 'File upload is not available on this deployment. Run the app locally for QC analysis.' });
+    return res.status(501).json({ error: 'Server-side upload not available. Use client-side analysis.' });
+  }
+
+  // ── POST /api/jobs/client-upload (client-side analysis result) ──
+  if (method === 'POST' && slug[0] === 'jobs' && slug[1] === 'client-upload') {
+    const { job } = body;
+    if (!job || !job.id) return res.status(400).json({ error: 'Invalid job payload' });
+    const store = loadJobs();
+    store.jobs.unshift(job);
+    saveJobs(store);
+    return res.json({ success: true, job });
   }
 
   // ── GET /api/jobs/:id ──────────────────────────────────────
@@ -271,4 +282,8 @@ export default async function handler(req, res) {
   }
 
   return res.status(404).json({ error: `Route not found: ${method} /api/${slug.join('/')}` });
+  } catch (err) {
+    console.error('Handler error:', err);
+    try { res.status(500).json({ error: 'Internal server error', detail: err.message }); } catch {}
+  }
 }
