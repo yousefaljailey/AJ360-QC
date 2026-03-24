@@ -963,21 +963,22 @@ async function openReport(id) {
     const tickClass  = unmeasured ? '' : c.pass ? 'ok' : 'no';
     const nameColor  = unmeasured ? 'var(--muted)' : c.pass ? 'var(--text)' : 'var(--fail)';
     const valDisplay = unmeasured
-      ? `<span style="color:var(--warn);font-style:italic">Not measurable in browser</span>`
+      ? `<span style="color:var(--warn);font-style:italic">${c.value || 'Not measurable in browser'}</span>`
       : c.pass
         ? (c.value || 'PASS')
         : `Found: <span style="color:var(--fail)">${c.value || '—'}</span>`;
 
-    return `<div class="comp-row" style="flex-direction:column;align-items:flex-start;padding:10px 0;gap:4px">
-      <div style="display:flex;justify-content:space-between;width:100%;align-items:center">
-        <span class="comp-name" style="display:flex;align-items:center;gap:6px">
-          <span>${c.icon||'●'}</span><strong style="color:${nameColor}">${c.label||k}</strong>
+    return `<div class="comp-row" style="flex-direction:column;align-items:flex-start;padding:12px 0;gap:6px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;width:100%;align-items:center;gap:12px">
+        <span style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+          <span style="font-size:15px;flex-shrink:0">${c.icon||'●'}</span>
+          <strong style="color:${nameColor};font-size:13px">${c.label||k}</strong>
         </span>
-        <span style="display:flex;align-items:center;gap:10px;flex-shrink:0">
-          <span style="font-size:11px;color:var(--muted)">${valDisplay}</span>
-          <span style="font-size:11px;color:var(--muted)">Expected: ${c.expected||'—'}</span>
-          <span class="comp-tick ${tickClass}" style="min-width:16px;text-align:center;color:${tickColor}">${tickMark}</span>
-        </span>
+        <span class="comp-tick ${tickClass}" style="flex-shrink:0;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;background:${unmeasured?'rgba(245,158,11,0.15)':c.pass?'rgba(34,197,94,0.15)':'rgba(239,68,68,0.15)'};color:${tickColor}">${tickMark}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;padding-left:23px;font-size:11px">
+        <div><span style="color:var(--muted)">Found: </span>${valDisplay}</div>
+        <div style="color:var(--muted)">Expected: <span style="color:var(--text)">${c.expected||'—'}</span></div>
       </div>
       ${detail}
     </div>`;
@@ -1433,7 +1434,19 @@ function buildClientReport(file, miData, bfData = null, loudData = null) {
   function gcd(a, b) { return b ? gcd(b, a%b) : a; }
   function calcAR(w, h) { if (!w || !h) return '—'; const g = gcd(w,h); return `${w/g}:${h/g}`; }
 
-  const arStr = video.DisplayAspectRatio_Original || video.DisplayAspectRatio || calcAR(width, height);
+  // Normalize aspect ratio — MediaInfo may return decimal ("1.778") or ratio ("16:9")
+  function normalizeAR(raw, w, h) {
+    if (!raw) return calcAR(w, h);
+    if (String(raw).includes(':')) return raw; // already "16:9"
+    const n = parseFloat(raw);
+    if (isNaN(n)) return raw;
+    if (Math.abs(n - 16/9)  < 0.02) return '16:9';
+    if (Math.abs(n - 4/3)   < 0.02) return '4:3';
+    if (Math.abs(n - 1)     < 0.02) return '1:1';
+    if (Math.abs(n - 2.39)  < 0.02) return '21:9';
+    return calcAR(w, h) || raw; // fall back to calculated
+  }
+  const arStr = normalizeAR(video.DisplayAspectRatio_Original || video.DisplayAspectRatio, width, height);
 
   // PCM 24-bit: require PCM format AND 24-bit depth
   // MXF audio CodecID can be hex (e.g. "04030301") — rely on Format field
@@ -1465,7 +1478,7 @@ function buildClientReport(file, miData, bfData = null, loudData = null) {
     const codecOk  = isPCM24(a);
     const sampleOk = sr === 48000;
     return {
-      index: i+1, label: a.Title || expLabels[i] || `Track ${i+1}`,
+      index: i+1, label: a.Title || a.Name || expLabels[i] || `Track ${i+1}`,
       expected: expLabels[i] || '—',
       codec: (a.Format || a.CodecID || '—').toLowerCase(),
       sampleRate: sr || a.SamplingRate || '—',
