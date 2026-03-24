@@ -4,5 +4,8 @@
       "PUPPETEER_SKIP_DOWNLOAD": "true",
       "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true"
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/app", "destination": "/app.html" }
+  ]
 }
