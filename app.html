@@ -227,6 +227,39 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
 @keyframes spin{to{transform:rotate(360deg)}}
 .view{display:none}
 .view.active{display:block}
+
+/* ── Toast ── */
+#toastContainer{position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{background:#1a1f2e;border:1px solid var(--border2);border-radius:10px;padding:12px 16px;font-size:12px;color:var(--text);min-width:280px;max-width:400px;box-shadow:0 8px 24px rgba(0,0,0,0.5);animation:toastIn 0.25s ease;pointer-events:auto}
+.toast.error{border-color:rgba(239,68,68,0.4);background:rgba(239,68,68,0.12)}
+.toast.success{border-color:rgba(34,197,94,0.4);background:rgba(34,197,94,0.08)}
+.toast.warn{border-color:rgba(240,180,41,0.4);background:rgba(240,180,41,0.08)}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+/* ── Print / PDF styles ── */
+@media print{
+  #sidebar,#topbar,.report-actions,.modal-ov,.filter-bar,.del-btn,.btn-signout,.btn-upload{display:none!important}
+  html,body{overflow:visible!important;background:#fff!important;color:#000!important;height:auto!important}
+  #app{display:block!important;height:auto!important}
+  #main{overflow:visible!important;height:auto!important}
+  #content{overflow:visible!important;padding:0!important}
+  .view{display:none!important}
+  #view-report{display:block!important;padding:20px}
+  .r-panel,.panel{background:#fff!important;border:1px solid #ccc!important;break-inside:avoid}
+  .report-file{color:#000!important;font-size:18px!important}
+  .report-meta{color:#555!important}
+  .comp-name strong,.comp-name{color:#000!important}
+  .comp-tick.ok{color:#16a34a!important}
+  .comp-tick.no{color:#dc2626!important}
+  .gauge-score{color:#000!important}
+  .badge{border:1px solid currentColor!important;background:transparent!important}
+  .badge.pass{color:#16a34a!important}
+  .badge.fail{color:#dc2626!important}
+  .badge.gold{color:#b45309!important}
+  .g-fill{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+  .report-grid{grid-template-columns:1fr 1fr}
+  .frame-cell{border:1px solid #ccc!important;background:#fff!important}
+}
 </style>
 </head>
 <body>
@@ -511,6 +544,9 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
   </div><!-- /main -->
 </div><!-- /app -->
 
+<!-- ════ TOAST ════ -->
+<div id="toastContainer"></div>
+
 <!-- ════ UPLOAD MODAL ════ -->
 <div class="modal-ov" id="uploadModal" onclick="if(event.target===this)closeUploadModal()">
   <div class="modal-box">
@@ -546,6 +582,41 @@ function signOut() {
   localStorage.removeItem('aj360_token');
   localStorage.removeItem('aj360_user');
   location.href = '/';
+}
+
+// ── Toast notifications ──
+function showToast(msg, type = 'info', duration = 4000) {
+  const el = document.createElement('div');
+  el.className = `toast${type !== 'info' ? ' ' + type : ''}`;
+  const icon = type === 'error' ? '✗ ' : type === 'success' ? '✓ ' : type === 'warn' ? '⚠ ' : '';
+  el.textContent = icon + msg;
+  const container = document.getElementById('toastContainer');
+  container.appendChild(el);
+  setTimeout(() => {
+    el.style.transition = 'opacity 0.3s';
+    el.style.opacity    = '0';
+    setTimeout(() => el.remove(), 300);
+  }, duration);
+}
+
+// ── Local job store (survives Vercel cold starts & ephemeral /tmp) ──
+function getLocalJobs() {
+  try { return JSON.parse(localStorage.getItem('aj360_local_jobs') || '[]'); } catch { return []; }
+}
+function saveLocalJob(job) {
+  try {
+    const jobs = getLocalJobs();
+    const idx = jobs.findIndex(j => j.id === job.id);
+    if (idx >= 0) jobs[idx] = job; else jobs.unshift(job);
+    if (jobs.length > 100) jobs.splice(100);
+    localStorage.setItem('aj360_local_jobs', JSON.stringify(jobs));
+  } catch(e) { console.warn('localStorage save failed:', e); }
+}
+function removeLocalJob(id) {
+  try {
+    const jobs = getLocalJobs().filter(j => j.id !== id);
+    localStorage.setItem('aj360_local_jobs', JSON.stringify(jobs));
+  } catch {}
 }
 
 // ── View state ──
@@ -598,16 +669,34 @@ async function api(url, opts = {}) {
 }
 
 async function loadJobs() {
-  const data = await api('/api/jobs');
-  if (!Array.isArray(data)) return;
-  allJobs = data;
+  const data      = await api('/api/jobs');
+  const localJobs = getLocalJobs();
+  const localMap  = Object.fromEntries(localJobs.map(j => [j.id, j]));
+
+  function jobSummary(j) {
+    return { id:j.id, filename:j.filename, duration:j.duration, size:j.size,
+      resolution:j.resolution, format:j.format, status:j.status, score:j.score,
+      aj360Pass:j.aj360Pass, uploadedAt:j.uploadedAt, uploadedBy:j.uploadedBy };
+  }
+
+  if (Array.isArray(data)) {
+    const apiIds = new Set(data.map(j => j.id));
+    const merged = data.map(j => ({ ...j }));
+    // Prepend jobs the API lost (Vercel ephemeral /tmp wiped)
+    localJobs.forEach(lj => { if (!apiIds.has(lj.id)) merged.unshift(jobSummary(lj)); });
+    allJobs = merged;
+  } else {
+    // API unavailable — fall back entirely to localStorage
+    allJobs = localJobs.map(jobSummary);
+  }
+
   updateTopbar();
   renderDashboard();
   if (currentView === 'queue')   renderQueue();
   if (currentView === 'reports') renderReportsList();
-  const proc = allJobs.filter(j => j.status === 'processing').length;
+  const proc  = allJobs.filter(j => j.status === 'processing').length;
   const badge = document.getElementById('queueBadge');
-  badge.textContent = proc;
+  badge.textContent  = proc;
   badge.style.display = proc > 0 ? 'inline-block' : 'none';
 }
 
@@ -708,8 +797,10 @@ function jobRow(j, compact = false) {
 
 // ── Queue render ──
 function renderQueue() {
-  const q     = document.getElementById('searchInput')?.value?.toLowerCase() || '';
-  let filtered = allJobs.filter(j => {
+  const q = document.getElementById('searchInput')?.value?.toLowerCase() || '';
+  const filtered = allJobs.filter(j => {
+    // "Failed" = AJ360 non-compliant (status is still 'completed')
+    if (queueFilter === 'failed') return j.aj360Pass === false || j.status === 'error';
     if (queueFilter !== 'all' && j.status !== queueFilter) return false;
     if (q && !j.filename.toLowerCase().includes(q)) return false;
     return true;
@@ -746,9 +837,19 @@ function renderReportsList() {
 // ── Open QC report ──
 async function openReport(id) {
   try {
-    const job = await api('/api/jobs/' + id);
-    if (!job) { console.error('Could not load job', id); return; }
-    if (!job.report) { console.warn('No report for job', id); return; }
+    // 1. localStorage first — full report persists across Vercel cold starts
+    let job = getLocalJobs().find(j => j.id === id);
+
+    // 2. If not local (or no report), try API
+    if (!job || !job.report) {
+      const apiJob = await api('/api/jobs/' + id);
+      if (apiJob && apiJob.report) job = apiJob;
+    }
+
+    if (!job || !job.report) {
+      showToast('Report not found. Please re-upload the file to regenerate the report.', 'error');
+      return;
+    }
     selectedJob = job;
   const r  = job.report;
   const ch = r.checks || {};
@@ -761,11 +862,13 @@ async function openReport(id) {
     `${fi.format || job.format} · ${fi.videoCodec || '—'} · ${fi.resolution || job.resolution} · ${fi.bitRate || '—'} · Duration: ${fi.duration || job.duration} · ${new Date(job.uploadedAt).toLocaleString('en-GB')}`;
 
   // Badges
-  const readyForDelivery = r.overallPass;
+  const readyForDelivery  = r.overallPass;
+  const totalMeasured     = (r.passedCount ?? 0) + (r.failedCount ?? 0);
+  const unmeasuredCount   = Object.values(ch).filter(c => c.measured === false || c.pass === null).length;
   document.getElementById('rpt-badges').innerHTML = [
     job.aj360Pass ? '<span class="badge gold">✦ AJ360 COMPLIANT</span>' : '<span class="badge fail">✦ AJ360 NON-COMPLIANT</span>',
     `<span class="badge ${job.score >= 90 ? 'pass' : job.score >= 70 ? 'pend' : 'fail'}">Quality Score: ${job.score} / 100</span>`,
-    `<span class="badge gold">${r.passedCount ?? '?'} / 9 checks passed</span>`,
+    `<span class="badge gold">${r.passedCount ?? '?'} / ${totalMeasured} checks passed${unmeasuredCount > 0 ? ` · ${unmeasuredCount} N/A (FFmpeg)` : ''}</span>`,
     readyForDelivery ? '<span class="badge pass">✓ Ready for Delivery</span>' : '<span class="badge fail">✗ Not Ready for Delivery</span>'
   ].join('');
 
@@ -779,25 +882,28 @@ async function openReport(id) {
   const checkKeys = ['format','resolution','frameRate','aspectRatio','audioCodec','sampleRate','audioTracks','loudness','blackFrames'];
   document.getElementById('rpt-gauge-bars').innerHTML = checkKeys.map(k => {
     const c = ch[k]; if (!c) return '';
-    const color = c.pass ? 'var(--pass)' : 'var(--fail)';
-    const tick  = c.pass ? '✓' : '✗';
+    const unmeasured = c.pass === null || c.measured === false;
+    const color = unmeasured ? 'var(--warn)' : c.pass ? 'var(--pass)' : 'var(--fail)';
+    const tick  = unmeasured ? '?' : c.pass ? '✓' : '✗';
+    const val   = unmeasured ? 'N/A' : (c.value || (c.pass ? 'PASS' : 'FAIL'));
     return `<div class="g-row">
       <div class="g-lbl" style="font-size:11px">${c.label || k}</div>
-      <div class="g-track"><div class="g-fill" style="width:100%;background:${color};opacity:${c.pass?0.7:1}"></div></div>
-      <div class="g-val" style="color:${color};font-size:11px">${tick} ${c.pass ? (c.value || 'PASS') : (c.value || 'FAIL')}</div>
+      <div class="g-track"><div class="g-fill" style="width:100%;background:${color};opacity:${(!unmeasured&&c.pass)?0.7:1}"></div></div>
+      <div class="g-val" style="color:${color};font-size:11px">${tick} ${val}</div>
     </div>`;
   }).join('');
 
-  // Detailed checks panel (all 9 checks with found vs expected + timecodes)
+  // Detailed checks panel (all checks with found vs expected + timecodes)
   document.getElementById('rpt-compliance').innerHTML = checkKeys.map(k => {
     const c = ch[k]; if (!c) return '';
-    const isBlack = k === 'blackFrames';
-    const isTracks = k === 'audioTracks';
+    const isBlack    = k === 'blackFrames';
+    const isTracks   = k === 'audioTracks';
+    const unmeasured = c.pass === null || c.measured === false;
 
     let detail = '';
 
-    // Black frames timecodes
-    if (isBlack && !c.pass && c.timecodes?.length) {
+    // Black frames timecodes (only when actually measured and failing)
+    if (isBlack && !unmeasured && !c.pass && c.timecodes?.length) {
       detail = `<div style="margin-top:8px;padding:8px;background:rgba(239,68,68,0.08);border-radius:6px;border:1px solid rgba(239,68,68,0.2)">
         <div style="font-size:10px;font-weight:700;color:var(--fail);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.06em">Black Frame Timecodes (${c.timecodes.length} occurrence${c.timecodes.length!==1?'s':''})</div>
         <table style="width:100%;font-size:11px;border-collapse:collapse">
@@ -812,7 +918,7 @@ async function openReport(id) {
     }
 
     // Audio tracks detail
-    if (isTracks && c.tracks?.length) {
+    if (isTracks && !unmeasured && c.tracks?.length) {
       detail = `<div style="margin-top:8px">
         <table style="width:100%;font-size:11px;border-collapse:collapse">
           <tr style="color:var(--muted);font-size:10px"><td style="padding:3px 6px 3px 0">#</td><td style="padding:3px 6px">Expected</td><td style="padding:3px 6px">Codec</td><td style="padding:3px 6px">Rate</td><td style="padding:3px">Ch</td><td></td></tr>
@@ -821,7 +927,7 @@ async function openReport(id) {
             return `<tr style="color:${ok?'var(--text)':'var(--fail)'}">
               <td style="padding:3px 6px 3px 0;color:var(--muted)">${t.index}</td>
               <td style="padding:3px 6px">${t.expected}</td>
-              <td style="padding:3px 6px;font-family:monospace;font-size:10px">${t.codec?.toUpperCase()}</td>
+              <td style="padding:3px 6px;font-family:monospace;font-size:10px">${(t.codec||'—').toUpperCase()}</td>
               <td style="padding:3px 6px">${t.sampleRate} Hz</td>
               <td style="padding:3px">${t.channels}ch</td>
               <td style="padding:3px;text-align:right">${ok?'<span style="color:var(--pass)">✓</span>':'<span style="color:var(--fail)">✗</span>'}</td>
@@ -831,44 +937,57 @@ async function openReport(id) {
       </div>`;
     }
 
-    // Loudness expected range note
-    if (k === 'loudness' && !c.pass) {
+    // Loudness note (only when measured)
+    if (k === 'loudness' && !unmeasured && !c.pass) {
       detail = `<div style="margin-top:6px;font-size:11px;color:var(--fail)">Measured: ${c.value} — Target: ${c.expected}</div>`;
     }
+
+    const tickColor  = unmeasured ? 'var(--warn)' : c.pass ? 'var(--pass)' : 'var(--fail)';
+    const tickMark   = unmeasured ? '?' : c.pass ? '✓' : '✗';
+    const tickClass  = unmeasured ? '' : c.pass ? 'ok' : 'no';
+    const nameColor  = unmeasured ? 'var(--muted)' : c.pass ? 'var(--text)' : 'var(--fail)';
+    const valDisplay = unmeasured
+      ? `<span style="color:var(--warn);font-style:italic">Not measurable in browser</span>`
+      : c.pass
+        ? (c.value || 'PASS')
+        : `Found: <span style="color:var(--fail)">${c.value || '—'}</span>`;
 
     return `<div class="comp-row" style="flex-direction:column;align-items:flex-start;padding:10px 0;gap:4px">
       <div style="display:flex;justify-content:space-between;width:100%;align-items:center">
         <span class="comp-name" style="display:flex;align-items:center;gap:6px">
-          <span>${c.icon||'●'}</span><strong style="color:${c.pass?'var(--text)':'var(--fail)'}">${c.label||k}</strong>
+          <span>${c.icon||'●'}</span><strong style="color:${nameColor}">${c.label||k}</strong>
         </span>
         <span style="display:flex;align-items:center;gap:10px;flex-shrink:0">
-          <span style="font-size:11px;color:var(--muted)">${c.pass ? c.value||'PASS' : `Found: <span style="color:var(--fail)">${c.value||'—'}</span>`}</span>
+          <span style="font-size:11px;color:var(--muted)">${valDisplay}</span>
           <span style="font-size:11px;color:var(--muted)">Expected: ${c.expected||'—'}</span>
-          <span class="comp-tick ${c.pass?'ok':'no'}" style="min-width:16px;text-align:center">${c.pass?'✓':'✗'}</span>
+          <span class="comp-tick ${tickClass}" style="min-width:16px;text-align:center;color:${tickColor}">${tickMark}</span>
         </span>
       </div>
       ${detail}
     </div>`;
   }).join('');
 
-  // Black frames summary card (replaces old frame-grid)
+  // Frame analysis summary card
   const bf = ch.blackFrames;
+  const bfUnmeasured = bf?.pass === null || bf?.measured === false;
+  const bfCount = bfUnmeasured ? '?' : (bf?.count ?? 0);
+  const bfGood  = !bfUnmeasured && (bf?.count ?? 0) === 0;
   document.getElementById('rpt-frames').innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
       <div class="frame-cell">
-        <div class="frame-val ${bf?.pass?'good':''}">${bf?.count ?? 0}</div>
-        <div class="frame-lbl">Black Frame Events</div>
+        <div class="frame-val ${bfGood?'good':''}" style="color:${bfUnmeasured?'var(--warn)':''}">${bfCount}</div>
+        <div class="frame-lbl">Black Frame Events${bfUnmeasured?'<br><span style="color:var(--warn);font-size:9px">(not scanned — FFmpeg required)</span>':''}</div>
       </div>
       <div class="frame-cell">
-        <div class="frame-val ${ch.frameRate?.pass?'good':''}">${ch.frameRate?.value || '—'}</div>
-        <div class="frame-lbl">Frame Rate</div>
+        <div class="frame-val ${ch.frameRate?.measured===false?'':ch.frameRate?.pass?'good':'lo'}">${ch.frameRate?.value || '—'}</div>
+        <div class="frame-lbl">Frame Rate<br><span style="color:var(--faint);font-size:9px">Required: 25 fps</span></div>
       </div>
       <div class="frame-cell">
-        <div class="frame-val ${ch.resolution?.pass?'good':''}" style="font-size:16px">${ch.resolution?.value || '—'}</div>
-        <div class="frame-lbl">Resolution</div>
+        <div class="frame-val ${ch.resolution?.measured===false?'':ch.resolution?.pass?'good':'lo'}" style="font-size:16px">${ch.resolution?.value || '—'}</div>
+        <div class="frame-lbl">Resolution<br><span style="color:var(--faint);font-size:9px">Required: 3840×2160</span></div>
       </div>
     </div>
-    ${bf && !bf.pass && bf.timecodes?.length ? `
+    ${bf && !bfUnmeasured && !bf.pass && bf.timecodes?.length ? `
     <div style="margin-top:12px;padding:12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:8px">
       <div style="font-size:11px;font-weight:700;color:var(--fail);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.06em">⬛ Black Frame Timecodes</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:6px">
@@ -945,6 +1064,7 @@ async function loadHealth() {
 async function deleteJob(e, id) {
   e.stopPropagation();
   if (!confirm('Delete this job?')) return;
+  removeLocalJob(id);
   await api('/api/jobs/' + id, { method: 'DELETE' });
   await loadJobs();
 }
@@ -1043,6 +1163,9 @@ async function analyzeFile(file) {
       report
     };
 
+    // Save to localStorage FIRST — survives Vercel cold starts
+    saveLocalJob(job);
+    // Also sync to API (best effort — Vercel /tmp is ephemeral)
     await api('/api/jobs/client-upload', { method: 'POST', body: JSON.stringify({ job }) });
 
     setStatus('✓ Analysis complete', 100);
@@ -1055,6 +1178,7 @@ async function analyzeFile(file) {
   } catch (err) {
     const msg = (err && err.message) ? err.message : (typeof err === 'string' ? err : 'Unknown error');
     setStatus('✗ Analysis failed: ' + msg, 0);
+    showToast('Upload failed: ' + msg, 'error');
     console.error('analyzeFile error:', err);
   }
 }
@@ -1101,45 +1225,76 @@ function buildClientReport(file, miData) {
   function calcAR(w, h) { if (!w || !h) return '—'; const g = gcd(w,h); return `${w/g}:${h/g}`; }
 
   const arStr = video.DisplayAspectRatio_Original || video.DisplayAspectRatio || calcAR(width, height);
-  const isPCM = s => /pcm|pcm_s24|pcm_s16/i.test(s || '');
-  const expLabels = ['Left','Right','Left Mix Minus','Right Mix Minus'];
 
+  // PCM 24-bit: require PCM format AND 24-bit depth
+  const isPCM24 = (a) => {
+    const fmt = (a.Format || a.CodecID || '').toLowerCase();
+    const isPCMFmt = /pcm/.test(fmt) || /sowt|twos/.test(fmt);
+    if (!isPCMFmt) return false;
+    const bitDepth = parseInt(a.BitDepth || 0);
+    if (bitDepth > 0) return bitDepth === 24;          // MediaInfo reported depth
+    return /pcm_s24|pcm24/.test(fmt);                  // codec name fallback
+  };
+  const getPCMLabel = (a) => {
+    const base = (a.Format || a.CodecID || '—').toUpperCase();
+    return a.BitDepth ? `${base} ${a.BitDepth}-bit` : base;
+  };
+
+  const expLabels = ['Left','Right','Left Mix Minus','Right Mix Minus'];
   const trackDetails = audios.map((a, i) => {
-    const codecName = a.Format || a.CodecID || '—';
-    const codecOk   = isPCM(codecName);
-    const sampleOk  = parseInt(a.SamplingRate || 0) === 48000;
+    const codecOk  = isPCM24(a);
+    const sampleOk = parseInt(a.SamplingRate || 0) === 48000;
     return {
       index: i+1, label: a.Title || expLabels[i] || `Track ${i+1}`,
-      expected: expLabels[i] || '—', codec: codecName.toLowerCase(),
+      expected: expLabels[i] || '—', codec: (a.Format || a.CodecID || '—').toLowerCase(),
       sampleRate: a.SamplingRate || '—', channels: parseInt(a.Channels||1),
       layout: a.ChannelLayout||'mono', codecOk, sampleOk
     };
   });
 
   const noData = !miData;
+
+  // pass: true/false = measured  |  pass: null + measured:false = not measurable in browser
   const checks = {
-    format:      { label:'File Format',        icon:'📄', pass:ext==='mxf',                                         value:ext.toUpperCase(),                               expected:'MXF' },
-    resolution:  { label:'Resolution',         icon:'🖥',  pass:!noData && width===3840 && height===2160,            value:width&&height?`${width}x${height}`:'Not detected', expected:'3840×2160 (UHD)' },
-    frameRate:   { label:'Frame Rate',         icon:'🎞',  pass:!noData && Math.abs(fpsRaw-25)<0.1,                 value:fpsRaw?`${fpsRaw.toFixed(2)} fps`:'Not detected',  expected:'25 fps' },
-    aspectRatio: { label:'Aspect Ratio',       icon:'📐', pass:!noData && arStr==='16:9',                           value:arStr||'Not detected',                           expected:'16:9' },
-    audioCodec:  { label:'Audio Codec',        icon:'🔊', pass:!noData && audios.length>0 && audios.every(a=>isPCM(a.Format||a.CodecID)), value:audios.length?(audios[0].Format||audios[0].CodecID||'—').toUpperCase():'None', expected:'PCM 24-bit (pcm_s24le)' },
-    sampleRate:  { label:'Sample Rate',        icon:'〰', pass:!noData && audios.length>0 && audios.every(a=>parseInt(a.SamplingRate||0)===48000), value:audios.length?audios[0].SamplingRate+' Hz':'—', expected:'48,000 Hz' },
-    audioTracks: { label:'Audio Tracks',       icon:'🎚', pass:!noData && audios.length===4 && trackDetails.every(t=>t.codecOk&&t.sampleOk), value:`${audios.length} track${audios.length!==1?'s':''}`, expected:'4 tracks: Left / Right / Left Mix Minus / Right Mix Minus', tracks:trackDetails },
-    loudness:    { label:'Loudness (EBU R128)',icon:'📊', pass:false, value:'Not measured — requires server analysis', expected:'-23 LUFS (±1 LU)' },
-    blackFrames: { label:'Black Frames',       icon:'⬛', pass:false, count:0, timecodes:[], value:'Not scanned — requires server analysis', expected:'No black frames' }
+    format:      { label:'File Format',         icon:'📄', measured:true,    pass: ext==='mxf',
+                   value: ext.toUpperCase(), expected:'MXF' },
+    resolution:  { label:'Resolution',          icon:'🖥',  measured:!noData, pass: !noData && width===3840 && height===2160,
+                   value: width&&height?`${width}x${height}`:'Not detected', expected:'3840×2160 (UHD)' },
+    frameRate:   { label:'Frame Rate',          icon:'🎞',  measured:!noData, pass: !noData && Math.abs(fpsRaw-25)<0.1,
+                   value: fpsRaw?`${fpsRaw.toFixed(2)} fps`:'Not detected', expected:'25 fps' },
+    aspectRatio: { label:'Aspect Ratio',        icon:'📐', measured:!noData, pass: !noData && arStr==='16:9',
+                   value: arStr||'Not detected', expected:'16:9' },
+    audioCodec:  { label:'Audio Codec',         icon:'🔊', measured:!noData,
+                   pass: !noData && audios.length>0 && audios.every(isPCM24),
+                   value: audios.length ? getPCMLabel(audios[0]) : 'None', expected:'PCM 24-bit (pcm_s24le)' },
+    sampleRate:  { label:'Sample Rate',         icon:'〰', measured:!noData,
+                   pass: !noData && audios.length>0 && audios.every(a=>parseInt(a.SamplingRate||0)===48000),
+                   value: audios.length?(audios[0].SamplingRate||'—')+' Hz':'—', expected:'48,000 Hz' },
+    audioTracks: { label:'Audio Tracks',        icon:'🎚', measured:!noData,
+                   pass: !noData && audios.length===4 && trackDetails.every(t=>t.codecOk&&t.sampleOk),
+                   value: `${audios.length} track${audios.length!==1?'s':''}`,
+                   expected:'4 tracks: Left / Right / Left Mix Minus / Right Mix Minus', tracks:trackDetails },
+    // Loudness and black frames require FFmpeg — cannot be measured in browser
+    loudness:    { label:'Loudness (EBU R128)', icon:'📊', measured:false, pass:null,
+                   value:'Requires FFmpeg (server-side analysis)', expected:'-23 LUFS (±1 LU)' },
+    blackFrames: { label:'Black Frames',        icon:'⬛', measured:false, pass:null,
+                   count:0, timecodes:[], value:'Requires FFmpeg (server-side analysis)', expected:'No black frames' }
   };
 
-  const failed = Object.values(checks).filter(c=>!c.pass).length;
-  const passed = Object.values(checks).filter(c=> c.pass).length;
-  const score  = Math.max(0, 100 - failed * 11);
+  // Score and pass/fail only from measurable checks
+  const measurable   = Object.values(checks).filter(c => c.measured);
+  const failedChecks = measurable.filter(c => !c.pass);
+  const passedChecks = measurable.filter(c =>  c.pass);
+  const score        = Math.max(0, 100 - failedChecks.length * 14);
+  const overallPass  = failedChecks.length === 0;
 
   const durMs  = parseFloat(general.Duration || 0);
   const durSec = durMs > 1000 ? durMs/1000 : durMs;
-  const durFmt = durSec>0 ? new Date(durSec*1000).toISOString().slice(11,19).replace(/^00:/,'') : '—';
+  const durFmt = durSec > 0 ? new Date(durSec*1000).toISOString().slice(11,19).replace(/^00:/,'') : '—';
 
   return {
-    checks, overallPass: failed===0, aj360Pass: failed===0,
-    score, passedCount: passed, failedCount: failed,
+    checks, overallPass, aj360Pass: overallPass,
+    score, passedCount: passedChecks.length, failedCount: failedChecks.length,
     fileInfo: {
       format: ext.toUpperCase(), fileSize: fmtBytes(file.size),
       resolution: width&&height?`${width}x${height}`:'—',
@@ -1148,10 +1303,10 @@ function buildClientReport(file, miData) {
       duration: durFmt, frameRate: fpsRaw?`${fpsRaw.toFixed(2)} fps`:'—'
     },
     audioInfo: {
-      codec: audios.length?(audios[0].Format||audios[0].CodecID||'—').toUpperCase():'—',
-      sampleRate: audios.length?audios[0].SamplingRate+' Hz':'—',
+      codec: audios.length ? getPCMLabel(audios[0]) : '—',
+      sampleRate: audios.length?(audios[0].SamplingRate||'—')+' Hz':'—',
       channels: audios.length, tracks: trackDetails,
-      loudness:'Not measured', truePeak:'Not measured', lra:'Not measured'
+      loudness:'Not measured (requires FFmpeg)', truePeak:'Not measured', lra:'Not measured'
     }
   };
 }
@@ -1166,6 +1321,8 @@ function downloadJSON() {
   a.click();
 }
 function downloadPDF() {
+  if (!selectedJob) return;
+  // Print current report view as PDF — user selects "Save as PDF" in print dialog
   window.print();
 }
 
