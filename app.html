@@ -236,6 +236,43 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
 .toast.warn{border-color:rgba(240,180,41,0.4);background:rgba(240,180,41,0.08)}
 @keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 
+/* ── Content area wrapper ── */
+#content-area{flex:1;display:flex;overflow:hidden}
+
+/* ── Video Preview Panel (frame.io style) ── */
+#video-panel{display:none;width:320px;flex-shrink:0;background:var(--sidebar);border-left:1px solid var(--border);flex-direction:column;overflow:hidden}
+#video-panel.visible{display:flex}
+.vp-header{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;min-width:0}
+.vp-title{font-size:11px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:5px;flex-shrink:0;white-space:nowrap}
+.vp-filename{font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.vp-video-wrap{position:relative;background:#000;width:100%;aspect-ratio:16/9;flex-shrink:0;cursor:pointer}
+.vp-video-wrap:hover .vp-overlay{opacity:1!important}
+#previewVideo{width:100%;height:100%;object-fit:contain;display:block}
+.vp-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;transition:opacity 0.2s;pointer-events:none}
+.vp-overlay.paused{opacity:1}
+.vp-overlay.playing{opacity:0}
+.vp-play-big{width:44px;height:44px;background:rgba(0,0,0,0.65);border-radius:50%;display:flex;align-items:center;justify-content:center}
+.vp-controls{padding:10px 14px 12px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--card)}
+.vp-timecode{font-family:monospace;font-size:12px;color:var(--gold);text-align:center;margin-bottom:8px;letter-spacing:0.06em}
+.vp-progress{height:4px;background:var(--border2);border-radius:99px;cursor:pointer;margin-bottom:10px;position:relative;overflow:visible}
+.vp-progress-fill{height:100%;background:var(--gold);border-radius:99px;pointer-events:none;transition:width 0.05s linear}
+.vp-btn-row{display:flex;align-items:center;justify-content:center;gap:10px}
+.vp-btn{background:none;border:none;cursor:pointer;color:var(--muted);padding:5px 8px;border-radius:6px;font-size:11px;font-weight:600;transition:color 0.15s,background 0.15s;display:flex;align-items:center;justify-content:center;line-height:1}
+.vp-btn:hover{color:var(--text);background:rgba(255,255,255,0.06)}
+.vp-play-btn{background:var(--gold-dim);color:var(--gold)!important;border-radius:50%;width:30px;height:30px;padding:0}
+.vp-play-btn:hover{background:rgba(240,180,41,0.25)!important}
+.vp-issues{padding:12px 14px;overflow-y:auto;flex:1}
+.vp-issues-title{font-size:10px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:8px}
+.vp-tc-item{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:6px;cursor:pointer;border:1px solid transparent;transition:all 0.15s;margin-bottom:3px}
+.vp-tc-item.black-issue:hover{background:rgba(239,68,68,0.08);border-color:rgba(239,68,68,0.25)}
+.vp-tc-item.freeze-issue:hover{background:rgba(245,158,11,0.08);border-color:rgba(245,158,11,0.25)}
+.vp-tc-badge{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;flex-shrink:0;text-transform:uppercase;letter-spacing:0.04em}
+.vp-tc-badge.b{background:rgba(239,68,68,0.15);color:var(--fail)}
+.vp-tc-badge.f{background:rgba(245,158,11,0.15);color:var(--warn)}
+.vp-tc-time{font-family:monospace;font-size:11px;color:var(--text);font-weight:500;flex:1}
+.vp-tc-dur{font-size:10px;color:var(--faint);flex-shrink:0}
+.tc-seek-row{cursor:pointer;transition:background 0.12s}
+
 /* ── Print / PDF styles ── */
 @media print{
   #sidebar,#topbar,.report-actions,.modal-ov,.filter-bar,.del-btn,.btn-signout,.btn-upload{display:none!important}
@@ -338,6 +375,7 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
       <button class="btn-signout" onclick="signOut()">Sign Out</button>
     </div>
 
+    <div id="content-area">
     <!-- Content -->
     <div id="content">
 
@@ -542,6 +580,43 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
       </div>
 
     </div><!-- /content -->
+
+    <!-- ── Video Preview Panel ── -->
+    <div id="video-panel">
+      <div class="vp-header">
+        <span class="vp-title">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Preview
+        </span>
+        <span id="vp-filename" class="vp-filename"></span>
+      </div>
+      <div class="vp-video-wrap" onclick="vpTogglePlay()">
+        <video id="previewVideo" preload="metadata" playsinline></video>
+        <div class="vp-overlay paused" id="vpOverlay">
+          <div class="vp-play-big">
+            <svg id="vpPlayIcon" width="16" height="16" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          </div>
+        </div>
+      </div>
+      <div class="vp-controls">
+        <div class="vp-timecode" id="vp-timecode">00:00:00:00</div>
+        <div class="vp-progress" id="vpProgress" onclick="vpSeekClick(event)">
+          <div class="vp-progress-fill" id="vpProgressFill" style="width:0%"></div>
+        </div>
+        <div class="vp-btn-row">
+          <button class="vp-btn" onclick="vpSkip(-5)">−5s</button>
+          <button class="vp-btn vp-play-btn" onclick="vpTogglePlay()">
+            <svg id="vpBtnIcon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          </button>
+          <button class="vp-btn" onclick="vpSkip(5)">+5s</button>
+        </div>
+      </div>
+      <div class="vp-issues">
+        <div class="vp-issues-title">Timecode Issues</div>
+        <div id="vp-issue-list"><div style="color:var(--faint);font-size:11px;padding:4px 0">No issues detected</div></div>
+      </div>
+    </div><!-- /video-panel -->
+    </div><!-- /content-area -->
   </div><!-- /main -->
 </div><!-- /app -->
 
@@ -625,8 +700,17 @@ let currentView = 'dashboard';
 let allJobs = [];
 let queueFilter = 'all';
 let selectedJob = null;
+let currentFile = null;
+let currentJobId = null;
+let previewVideoURL = null;
 
 function showView(v) {
+  // hide video panel for non-report views
+  if (v !== 'report') {
+    document.getElementById('video-panel').classList.remove('visible');
+    const vid = document.getElementById('previewVideo');
+    if (vid && !vid.paused) vid.pause();
+  }
   // hide all views
   document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
   document.getElementById('view-report').style.display = 'none';
@@ -880,7 +964,7 @@ async function openReport(id) {
   scEl.className   = 'gauge-score' + (sc >= 90 ? '' : sc >= 70 ? ' mid' : ' lo');
 
   // Check summary pills
-  const checkKeys = ['format','resolution','frameRate','aspectRatio','audioCodec','sampleRate','audioTracks','loudness','blackFrames'];
+  const checkKeys = ['format','resolution','frameRate','aspectRatio','audioCodec','sampleRate','audioTracks','loudness','blackFrames','freezeFrames'];
   document.getElementById('rpt-gauge-bars').innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:6px">` +
     checkKeys.map(k => {
       const c = ch[k]; if (!c) return '';
@@ -984,11 +1068,37 @@ async function openReport(id) {
                     </tr>
                   </thead>
                   <tbody>
-                    ${c.timecodes.map((tc, i) => `<tr style="border-top:1px solid rgba(255,255,255,0.04)">
+                    ${c.timecodes.map((tc, i) => `<tr class="tc-seek-row" style="border-top:1px solid rgba(255,255,255,0.04)" onclick="seekVideoPlayer(${tc.startSecs})" onmouseover="this.style.background='rgba(239,68,68,0.07)'" onmouseout="this.style.background=''">
                       <td style="padding:7px 10px;color:var(--muted);font-size:11px">${i+1}</td>
-                      <td style="padding:7px 10px;font-family:monospace;color:var(--fail);font-size:12px">${tc.start}</td>
+                      <td style="padding:7px 10px;font-family:monospace;color:var(--fail);font-size:12px" title="Click to preview"><span style="opacity:0.6;margin-right:4px">▶</span>${tc.start}</td>
                       <td style="padding:7px 10px;font-family:monospace;color:var(--fail);font-size:12px">${tc.end}</td>
                       <td style="padding:7px 10px;color:var(--warn);font-size:12px">${tc.duration}</td>
+                    </tr>`).join('')}
+                  </tbody>
+                </table>
+              </td>
+            </tr>`;
+          }
+
+          if (k === 'freezeFrames' && !u && !c.pass && c.timecodes?.length) {
+            subRows = `<tr style="${rowBg};${leftBorder}">
+              <td></td>
+              <td colspan="4" style="padding:0 14px 12px 14px">
+                <table style="width:100%;border-collapse:collapse;border-radius:6px;overflow:hidden;border:1px solid rgba(245,158,11,0.25)">
+                  <thead>
+                    <tr style="background:rgba(245,158,11,0.08);border-bottom:1px solid rgba(245,158,11,0.2)">
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">#</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Timecode In</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Timecode Out</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Duration</td>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${c.timecodes.map((tc, i) => `<tr class="tc-seek-row" style="border-top:1px solid rgba(255,255,255,0.04)" onclick="seekVideoPlayer(${tc.startSecs})" onmouseover="this.style.background='rgba(245,158,11,0.07)'" onmouseout="this.style.background=''">
+                      <td style="padding:7px 10px;color:var(--muted);font-size:11px">${i+1}</td>
+                      <td style="padding:7px 10px;font-family:monospace;color:var(--warn);font-size:12px" title="Click to preview"><span style="opacity:0.6;margin-right:4px">▶</span>${tc.start}</td>
+                      <td style="padding:7px 10px;font-family:monospace;color:var(--warn);font-size:12px">${tc.end}</td>
+                      <td style="padding:7px 10px;color:var(--muted);font-size:12px">${tc.duration}</td>
                     </tr>`).join('')}
                   </tbody>
                 </table>
@@ -1034,6 +1144,13 @@ async function openReport(id) {
     ['True Peak',      ai.truePeak || '—',     true],
     ['LRA',            ai.lra || '—',          true],
   ]);
+
+  // Set up video preview panel if this is the just-analyzed file
+  if (currentFile && currentJobId === id) {
+    vpSetup(currentFile, r);
+  } else {
+    document.getElementById('video-panel').classList.remove('visible');
+  }
 
   showView('report');
   } catch (err) {
@@ -1150,14 +1267,15 @@ async function analyzeFile(file) {
     }
 
     setStatus('Building QC report…', 80);
-    // Attempt client-side black frame scan for browser-decodable formats
+    // Attempt client-side frame scan for browser-decodable formats
     // MXF cannot be decoded by browsers, so this only runs for MP4/MOV/WebM etc.
-    let bfData = null;
+    let bfData = null, ffData = null;
     if (['mp4','mov','webm','mkv','m4v'].includes(ext)) {
       try {
-        setStatus('Scanning for black frames…', 82);
-        bfData = await detectBlackFramesBrowser(file, setStatus);
-      } catch (bfErr) { console.warn('Black frame scan failed:', bfErr); }
+        setStatus('Scanning frames for issues…', 82);
+        const videoIssues = await detectVideoIssuesBrowser(file, setStatus);
+        if (videoIssues) { bfData = videoIssues.blackFrames; ffData = videoIssues.freezeFrames; }
+      } catch (bfErr) { console.warn('Video frame scan failed:', bfErr); }
     }
 
     // Attempt loudness measurement for small browser-decodable files
@@ -1167,7 +1285,7 @@ async function analyzeFile(file) {
     } catch (lErr) { console.warn('Loudness measurement error:', lErr); }
 
     setStatus('Building QC report…', 92);
-    const report = buildClientReport(file, miData, bfData, loudData);
+    const report = buildClientReport(file, miData, bfData, ffData, loudData);
 
     setStatus('Saving…', 95);
     const jobId = 'JB_' + Math.random().toString(16).slice(2,10).toUpperCase();
@@ -1185,6 +1303,10 @@ async function analyzeFile(file) {
       uploadedBy: user.email,
       report
     };
+
+    // Keep file reference for video preview panel
+    currentFile = file;
+    currentJobId = jobId;
 
     // Save to localStorage FIRST — survives Vercel cold starts
     saveLocalJob(job);
@@ -1330,14 +1452,17 @@ async function measureLoudnessBrowser(file, setStatus) {
   }
 }
 
-// ── Canvas-based black frame detection (browser-decodable formats only) ──
-async function detectBlackFramesBrowser(file, setStatus) {
+// ── Combined canvas-based black frame + freeze frame detection ──
+// Single seek pass for both checks (browser-decodable formats only)
+async function detectVideoIssuesBrowser(file, setStatus) {
   return new Promise((resolve) => {
     const video  = document.createElement('video');
     const canvas = document.createElement('canvas');
     const ctx    = canvas.getContext('2d', { willReadFrequently: true });
     const url    = URL.createObjectURL(file);
-    const BLACK_THRESHOLD = 12; // avg luma below this (0-255) = black frame
+    const BLACK_THRESHOLD  = 12;  // avg luma below this (0-255) = black frame
+    const FREEZE_THRESHOLD = 4;   // avg luma diff below this = freeze frame
+    const MIN_FREEZE_SECS  = 0.5; // minimum duration to report a freeze
 
     function secsToTC(s) {
       const fps = 25;
@@ -1346,24 +1471,17 @@ async function detectBlackFramesBrowser(file, setStatus) {
       const p = n => String(n).padStart(2,'0');
       return `${p(h)}:${p(m)}:${p(sec)}:${p(f)}`;
     }
-    function avgLuma() {
-      const d = ctx.getImageData(0,0,canvas.width,canvas.height).data;
-      let sum = 0;
-      // Sample every 4th pixel for speed
-      for (let i = 0; i < d.length; i += 16) sum += 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-      return sum / (d.length / 16);
-    }
     function cleanup() { URL.revokeObjectURL(url); video.src = ''; }
 
-    const timecodes = [];
-    let blackStart = null, currentTime = 0, duration = 0, interval = 0.5;
+    const blackTCs = [], freezeTCs = [];
+    let blackStart = null, freezeStart = null;
+    let prevFrameData = null;
+    let currentTime = 0, duration = 0, interval = 0.5;
 
     video.onloadedmetadata = () => {
       duration = video.duration;
       if (!duration || !isFinite(duration)) { cleanup(); resolve(null); return; }
-      // Scale interval so we do at most 600 seeks (prevents UI hang on long files)
       interval = Math.max(0.5, duration / 600);
-      // Downsample canvas for speed (max 320px wide)
       const scale = Math.min(1, 320 / (video.videoWidth || 320));
       canvas.width  = Math.round((video.videoWidth  || 320) * scale);
       canvas.height = Math.round((video.videoHeight || 180) * scale);
@@ -1373,36 +1491,74 @@ async function detectBlackFramesBrowser(file, setStatus) {
     video.onseeked = () => {
       if (!canvas.width) return;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dark = avgLuma() < BLACK_THRESHOLD;
+      const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+      // ── Black frame check ──
+      let lumaSum = 0;
+      for (let i = 0; i < frameData.length; i += 16)
+        lumaSum += 0.299*frameData[i] + 0.587*frameData[i+1] + 0.114*frameData[i+2];
+      const avgLuma = lumaSum / (frameData.length / 16);
+      const dark = avgLuma < BLACK_THRESHOLD;
 
       if (dark && blackStart === null) {
         blackStart = currentTime;
       } else if (!dark && blackStart !== null) {
         const dur = currentTime - blackStart;
-        if (dur >= 1/25) { // at least 1 frame
-          timecodes.push({ start: secsToTC(blackStart), end: secsToTC(currentTime),
-            startSecs: blackStart, endSecs: currentTime, duration: dur.toFixed(2)+'s' });
-        }
+        if (dur >= 1/25) blackTCs.push({ start:secsToTC(blackStart), end:secsToTC(currentTime),
+          startSecs:blackStart, endSecs:currentTime, duration:dur.toFixed(2)+'s' });
         blackStart = null;
       }
 
+      // ── Freeze frame check ──
+      if (prevFrameData) {
+        let diffSum = 0;
+        const len = Math.min(frameData.length, prevFrameData.length);
+        for (let i = 0; i < len; i += 16) {
+          const la = 0.299*prevFrameData[i] + 0.587*prevFrameData[i+1] + 0.114*prevFrameData[i+2];
+          const lb = 0.299*frameData[i]     + 0.587*frameData[i+1]     + 0.114*frameData[i+2];
+          diffSum += Math.abs(la - lb);
+        }
+        const avgDiff = diffSum / (len / 16);
+        const frozen = avgDiff < FREEZE_THRESHOLD;
+
+        if (frozen && !dark && freezeStart === null) {
+          freezeStart = Math.max(0, currentTime - interval);
+        } else if ((!frozen || dark) && freezeStart !== null) {
+          const dur = currentTime - freezeStart;
+          if (dur >= MIN_FREEZE_SECS) freezeTCs.push({ start:secsToTC(freezeStart), end:secsToTC(currentTime),
+            startSecs:freezeStart, endSecs:currentTime, duration:dur.toFixed(2)+'s' });
+          freezeStart = null;
+        }
+      }
+      prevFrameData = frameData.slice();
+
       const pct = Math.round((currentTime / duration) * 8) + 82;
-      if (setStatus) setStatus(`Scanning for black frames… ${Math.round(currentTime/duration*100)}%`, pct);
+      if (setStatus) setStatus(`Scanning frames… ${Math.round(currentTime/duration*100)}%`, pct);
 
       currentTime += interval;
       if (currentTime <= duration + interval * 0.1) {
         video.currentTime = Math.min(currentTime, duration);
       } else {
-        // Close any open black segment at end of file
+        // Close open segments at end of file
         if (blackStart !== null) {
           const dur = duration - blackStart;
-          if (dur >= 1/25) timecodes.push({ start:secsToTC(blackStart), end:secsToTC(duration),
+          if (dur >= 1/25) blackTCs.push({ start:secsToTC(blackStart), end:secsToTC(duration),
             startSecs:blackStart, endSecs:duration, duration:dur.toFixed(2)+'s' });
         }
+        if (freezeStart !== null) {
+          const dur = duration - freezeStart;
+          if (dur >= MIN_FREEZE_SECS) freezeTCs.push({ start:secsToTC(freezeStart), end:secsToTC(duration),
+            startSecs:freezeStart, endSecs:duration, duration:dur.toFixed(2)+'s' });
+        }
         cleanup();
-        resolve({ pass: timecodes.length === 0, count: timecodes.length, timecodes,
-                  measured: true, value: timecodes.length === 0 ? 'No black frames' : `${timecodes.length} black frame event${timecodes.length!==1?'s':''}`,
-                  expected: 'No black frames' });
+        resolve({
+          blackFrames: { pass:blackTCs.length===0, count:blackTCs.length, timecodes:blackTCs,
+            measured:true, value:blackTCs.length===0?'No black frames':`${blackTCs.length} black frame event${blackTCs.length!==1?'s':''}`,
+            expected:'No black frames' },
+          freezeFrames: { pass:freezeTCs.length===0, count:freezeTCs.length, timecodes:freezeTCs,
+            measured:true, value:freezeTCs.length===0?'No freeze frames':`${freezeTCs.length} freeze frame event${freezeTCs.length!==1?'s':''}`,
+            expected:'No freeze frames' }
+        });
       }
     };
 
@@ -1413,7 +1569,7 @@ async function detectBlackFramesBrowser(file, setStatus) {
   });
 }
 
-function buildClientReport(file, miData, bfData = null, loudData = null) {
+function buildClientReport(file, miData, bfData = null, ffData = null, loudData = null) {
   const tracks  = miData?.media?.track || [];
   const general = tracks.find(t => (t['@type']||'').toLowerCase() === 'general') || {};
   const video   = tracks.find(t => (t['@type']||'').toLowerCase() === 'video')   || {};
@@ -1523,7 +1679,17 @@ function buildClientReport(file, miData, bfData = null, loudData = null) {
       : { label:'Black Frames', icon:'⬛', measured:false, pass:null,
           count:0, timecodes:[],
           value: ext === 'mxf' ? 'MXF not decodable in browser — use local server' : 'Requires FFmpeg (server-side analysis)',
-          expected:'No black frames' }
+          expected:'No black frames' },
+    // Freeze frames: use canvas scan result if available
+    freezeFrames: ffData
+      ? { label:'Freeze Frames', icon:'🧊', measured:true, pass: ffData.pass,
+          count: ffData.count, timecodes: ffData.timecodes,
+          value: ffData.value || (ffData.pass ? 'No freeze frames' : `${ffData.count} event${ffData.count!==1?'s':''} detected`),
+          expected:'No freeze frames' }
+      : { label:'Freeze Frames', icon:'🧊', measured:false, pass:null,
+          count:0, timecodes:[],
+          value: ext === 'mxf' ? 'MXF not decodable in browser — use local server' : 'Requires FFmpeg (server-side analysis)',
+          expected:'No freeze frames' }
   };
 
   // Score and pass/fail only from measurable checks (measured:true)
@@ -1556,6 +1722,99 @@ function buildClientReport(file, miData, bfData = null, loudData = null) {
       lra:       loudData?.lra      || 'Not measured'
     }
   };
+}
+
+// ── Video Preview Panel ──
+function vpSetup(file, report) {
+  if (previewVideoURL) URL.revokeObjectURL(previewVideoURL);
+  previewVideoURL = URL.createObjectURL(file);
+  const video = document.getElementById('previewVideo');
+  video.src = previewVideoURL;
+  document.getElementById('vp-filename').textContent = file.name;
+
+  // Populate timecode issues list
+  const ch = report?.checks || {};
+  const issues = [];
+  if (ch.blackFrames?.timecodes?.length)
+    ch.blackFrames.timecodes.forEach(tc => issues.push({...tc, type:'black'}));
+  if (ch.freezeFrames?.timecodes?.length)
+    ch.freezeFrames.timecodes.forEach(tc => issues.push({...tc, type:'freeze'}));
+  issues.sort((a, b) => a.startSecs - b.startSecs);
+
+  const issueList = document.getElementById('vp-issue-list');
+  issueList.innerHTML = issues.length
+    ? issues.map(tc => `
+      <div class="vp-tc-item ${tc.type==='black'?'black-issue':'freeze-issue'}" onclick="seekVideoPlayer(${tc.startSecs})">
+        <span class="vp-tc-badge ${tc.type==='black'?'b':'f'}">${tc.type==='black'?'BLK':'FRZ'}</span>
+        <span class="vp-tc-time">${tc.start}</span>
+        <span class="vp-tc-dur">${tc.duration}</span>
+      </div>`).join('')
+    : '<div style="color:var(--faint);font-size:11px;padding:4px 0">No issues detected</div>';
+
+  // Wire video events
+  video.ontimeupdate = updateVPProgress;
+  video.onplay = () => {
+    document.getElementById('vpOverlay').className = 'vp-overlay playing';
+    const pauseIcon = '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
+    document.getElementById('vpPlayIcon').innerHTML = pauseIcon;
+    document.getElementById('vpBtnIcon').innerHTML  = pauseIcon;
+  };
+  video.onpause = () => {
+    document.getElementById('vpOverlay').className = 'vp-overlay paused';
+    const playIcon = '<polygon points="5 3 19 12 5 21 5 3"/>';
+    document.getElementById('vpPlayIcon').innerHTML = playIcon;
+    document.getElementById('vpBtnIcon').innerHTML  = playIcon;
+  };
+
+  document.getElementById('video-panel').classList.add('visible');
+}
+
+function vpTogglePlay() {
+  const video = document.getElementById('previewVideo');
+  if (!video.src) return;
+  if (video.paused) video.play(); else video.pause();
+}
+
+function vpSkip(secs) {
+  const video = document.getElementById('previewVideo');
+  if (!video.src) return;
+  video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + secs));
+}
+
+function vpSeekClick(e) {
+  const video = document.getElementById('previewVideo');
+  if (!video.src || !video.duration) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pct  = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  video.currentTime = pct * video.duration;
+}
+
+function seekVideoPlayer(secs) {
+  const video = document.getElementById('previewVideo');
+  if (!video.src) return;
+  // Show panel if hidden
+  document.getElementById('video-panel').classList.add('visible');
+  const seek = () => {
+    video.currentTime = Math.max(0, Math.min(video.duration || 0, secs));
+    video.pause();
+    updateVPProgress();
+  };
+  if (video.readyState >= 1) { seek(); }
+  else { video.onloadedmetadata = seek; }
+}
+
+function updateVPProgress() {
+  const video = document.getElementById('previewVideo');
+  if (!video.duration) return;
+  const pct = (video.currentTime / video.duration) * 100;
+  document.getElementById('vpProgressFill').style.width = pct + '%';
+  // Timecode display
+  const s = video.currentTime;
+  const fps = 25;
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+  const f = Math.min(fps-1, Math.floor((s%1)*fps));
+  const p = n => String(n).padStart(2,'0');
+  document.getElementById('vp-timecode').textContent = `${p(h)}:${p(m)}:${p(sec)}:${p(f)}`;
 }
 
 // ── Download helpers ──
