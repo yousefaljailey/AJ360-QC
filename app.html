@@ -1464,21 +1464,18 @@ async function measureLoudnessBrowser(file, setStatus) {
   }
 }
 
-// ── Combined canvas-based black frame + freeze frame detection ──
-// Single seek pass for both checks (browser-decodable formats only)
+// ── Canvas-based black frame detection (browser-decodable formats only) ──
+// NOTE: Freeze frame detection is intentionally excluded from browser-side analysis.
+// Browser seek-based comparison cannot reliably distinguish a true frozen signal
+// from a normal static shot (e.g. a news anchor, a graphic, a locked-off camera).
+// Accurate freeze detection requires FFmpeg server-side: freezedetect filter.
 async function detectVideoIssuesBrowser(file, setStatus) {
   return new Promise((resolve) => {
-    const video   = document.createElement('video');
-    // Two canvases: 320px for black frame luma, 80px for freeze (more stable averaging)
-    const canvas  = document.createElement('canvas');
-    const ctx     = canvas.getContext('2d', { willReadFrequently: true });
-    const fCanvas = document.createElement('canvas');
-    const fCtx    = fCanvas.getContext('2d', { willReadFrequently: true });
-    fCanvas.width = 80; fCanvas.height = 45;
+    const video  = document.createElement('video');
+    const canvas = document.createElement('canvas');
+    const ctx    = canvas.getContext('2d', { willReadFrequently: true });
     const url    = URL.createObjectURL(file);
-    const BLACK_THRESHOLD  = 12; // avg luma below this = black frame
-    const FREEZE_THRESHOLD = 3;  // avg luma diff on 80x45 canvas; truly frozen ≈ 0–1, grain/noise ≈ 1–3, motion ≥ 5
-    const MIN_FREEZE_SECS  = 1.0;
+    const BLACK_THRESHOLD = 12; // avg luma below this (0–255) = black frame
 
     function secsToTC(s) {
       const fps = 25;
@@ -1488,25 +1485,9 @@ async function detectVideoIssuesBrowser(file, setStatus) {
       return `${p(h)}:${p(m)}:${p(sec)}:${p(f)}`;
     }
     function cleanup() { URL.revokeObjectURL(url); video.src = ''; }
-    function lumaAvg(d) {
-      let s = 0;
-      for (let i = 0; i < d.length; i += 4) s += 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-      return s / (d.length / 4);
-    }
-    function lumaDiff(a, b) {
-      let s = 0;
-      for (let i = 0; i < a.length; i += 4) {
-        s += Math.abs((0.299*a[i] + 0.587*a[i+1] + 0.114*a[i+2]) -
-                      (0.299*b[i] + 0.587*b[i+1] + 0.114*b[i+2]));
-      }
-      return s / (a.length / 4);
-    }
 
-    const blackTCs = [], freezeTCs = [];
-    let blackStart = null, freezeStart = null;
-    // Reference-frame approach: lock the first frame of a potential freeze and always
-    // compare subsequent frames against it — prevents codec-noise drift in chained comparisons
-    let freezeRef = null;
+    const blackTCs = [];
+    let blackStart = null;
     let currentTime = 0, duration = 0, interval = 0.5;
 
     video.onloadedmetadata = () => {
@@ -1521,11 +1502,12 @@ async function detectVideoIssuesBrowser(file, setStatus) {
 
     video.onseeked = () => {
       if (!canvas.width) return;
-
-      // ── Black frame check (320px canvas) ──
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      const dark = lumaAvg(frameData) < BLACK_THRESHOLD;
+      const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let lumaSum = 0;
+      for (let i = 0; i < d.length; i += 16)
+        lumaSum += 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+      const dark = (lumaSum / (d.length / 16)) < BLACK_THRESHOLD;
 
       if (dark && blackStart === null) {
         blackStart = currentTime;
@@ -1536,67 +1518,27 @@ async function detectVideoIssuesBrowser(file, setStatus) {
         blackStart = null;
       }
 
-      // ── Freeze frame check (80x45 canvas, reference-frame comparison) ──
-      if (!dark) {
-        fCtx.drawImage(video, 0, 0, 80, 45);
-        const fData = fCtx.getImageData(0, 0, 80, 45).data;
-
-        if (freezeRef) {
-          const diff = lumaDiff(freezeRef, fData);
-          if (diff < FREEZE_THRESHOLD) {
-            // Still matching reference → freeze
-            if (freezeStart === null) freezeStart = Math.max(0, currentTime - interval);
-            // Keep reference locked — do NOT update it
-          } else {
-            // Content changed → close any open freeze segment
-            if (freezeStart !== null) {
-              const dur = currentTime - freezeStart;
-              if (dur >= MIN_FREEZE_SECS) freezeTCs.push({ start:secsToTC(freezeStart), end:secsToTC(currentTime),
-                startSecs:freezeStart, endSecs:currentTime, duration:dur.toFixed(2)+'s' });
-              freezeStart = null;
-            }
-            freezeRef = fData.slice(); // new reference from current frame
-          }
-        } else {
-          freezeRef = fData.slice(); // seed first reference
-        }
-      } else {
-        // Dark frame — close open freeze and clear reference
-        if (freezeStart !== null) {
-          const dur = currentTime - freezeStart;
-          if (dur >= MIN_FREEZE_SECS) freezeTCs.push({ start:secsToTC(freezeStart), end:secsToTC(currentTime),
-            startSecs:freezeStart, endSecs:currentTime, duration:dur.toFixed(2)+'s' });
-          freezeStart = null;
-        }
-        freezeRef = null;
-      }
-
       const pct = Math.round((currentTime / duration) * 8) + 82;
-      if (setStatus) setStatus(`Scanning frames… ${Math.round(currentTime/duration*100)}%`, pct);
+      if (setStatus) setStatus(`Scanning for black frames… ${Math.round(currentTime/duration*100)}%`, pct);
 
       currentTime += interval;
       if (currentTime <= duration + interval * 0.1) {
         video.currentTime = Math.min(currentTime, duration);
       } else {
-        // Close open segments at end of file
         if (blackStart !== null) {
           const dur = duration - blackStart;
           if (dur >= 1/25) blackTCs.push({ start:secsToTC(blackStart), end:secsToTC(duration),
             startSecs:blackStart, endSecs:duration, duration:dur.toFixed(2)+'s' });
         }
-        if (freezeStart !== null) {
-          const dur = duration - freezeStart;
-          if (dur >= MIN_FREEZE_SECS) freezeTCs.push({ start:secsToTC(freezeStart), end:secsToTC(duration),
-            startSecs:freezeStart, endSecs:duration, duration:dur.toFixed(2)+'s' });
-        }
         cleanup();
         resolve({
-          blackFrames: { pass:blackTCs.length===0, count:blackTCs.length, timecodes:blackTCs,
-            measured:true, value:blackTCs.length===0?'No black frames':`${blackTCs.length} black frame event${blackTCs.length!==1?'s':''}`,
-            expected:'No black frames' },
-          freezeFrames: { pass:freezeTCs.length===0, count:freezeTCs.length, timecodes:freezeTCs,
-            measured:true, value:freezeTCs.length===0?'No freeze frames':`${freezeTCs.length} freeze frame event${freezeTCs.length!==1?'s':''}`,
-            expected:'No freeze frames' }
+          blackFrames: {
+            pass: blackTCs.length === 0, count: blackTCs.length, timecodes: blackTCs,
+            measured: true,
+            value: blackTCs.length === 0 ? 'No black frames' : `${blackTCs.length} black frame event${blackTCs.length!==1?'s':''}`,
+            expected: 'No black frames'
+          },
+          freezeFrames: null  // requires server-side FFmpeg — not measured in browser
         });
       }
     };
@@ -1719,16 +1661,12 @@ function buildClientReport(file, miData, bfData = null, ffData = null, loudData 
           count:0, timecodes:[],
           value: ext === 'mxf' ? 'MXF not decodable in browser — use local server' : 'Requires FFmpeg (server-side analysis)',
           expected:'No black frames' },
-    // Freeze frames: use canvas scan result if available
-    freezeFrames: ffData
-      ? { label:'Freeze Frames', icon:'🧊', measured:true, pass: ffData.pass,
-          count: ffData.count, timecodes: ffData.timecodes,
-          value: ffData.value || (ffData.pass ? 'No freeze frames' : `${ffData.count} event${ffData.count!==1?'s':''} detected`),
-          expected:'No freeze frames' }
-      : { label:'Freeze Frames', icon:'🧊', measured:false, pass:null,
-          count:0, timecodes:[],
-          value: ext === 'mxf' ? 'MXF not decodable in browser — use local server' : 'Requires FFmpeg (server-side analysis)',
-          expected:'No freeze frames' }
+    // Freeze frames: browser seek-based comparison cannot reliably distinguish
+    // a true frozen signal from a static shot — requires FFmpeg server-side analysis
+    freezeFrames: { label:'Freeze Frames', icon:'🧊', measured:false, pass:null,
+        count:0, timecodes:[],
+        value:'Requires FFmpeg (server-side) — browser cannot distinguish freeze from static shot',
+        expected:'No freeze frames' }
   };
 
   // Score and pass/fail only from measurable checks (measured:true)
