@@ -272,6 +272,10 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
 .vp-tc-time{font-family:monospace;font-size:11px;color:var(--text);font-weight:500;flex:1}
 .vp-tc-dur{font-size:10px;color:var(--faint);flex-shrink:0}
 .tc-seek-row{cursor:pointer;transition:background 0.12s}
+#vp-resize-handle{display:none;width:4px;flex-shrink:0;background:var(--border);cursor:col-resize;position:relative;transition:background 0.15s;z-index:10}
+#vp-resize-handle.visible{display:block}
+#vp-resize-handle:hover,#vp-resize-handle.dragging{background:var(--gold)}
+#vp-resize-handle::after{content:'';position:absolute;inset:0 -6px}
 
 /* ── Print / PDF styles ── */
 @media print{
@@ -581,6 +585,9 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
 
     </div><!-- /content -->
 
+    <!-- Resize handle -->
+    <div id="vp-resize-handle"></div>
+
     <!-- ── Video Preview Panel ── -->
     <div id="video-panel">
       <div class="vp-header">
@@ -711,6 +718,7 @@ function showView(v) {
   // hide video panel for non-report views
   if (v !== 'report') {
     document.getElementById('video-panel').classList.remove('visible');
+    document.getElementById('vp-resize-handle').classList.remove('visible');
     const vid = document.getElementById('previewVideo');
     if (vid && !vid.paused) vid.pause();
   }
@@ -1153,6 +1161,7 @@ async function openReport(id) {
     vpSetup(currentFile, r);
   } else {
     document.getElementById('video-panel').classList.remove('visible');
+    document.getElementById('vp-resize-handle').classList.remove('visible');
   }
 
   showView('report');
@@ -1459,13 +1468,17 @@ async function measureLoudnessBrowser(file, setStatus) {
 // Single seek pass for both checks (browser-decodable formats only)
 async function detectVideoIssuesBrowser(file, setStatus) {
   return new Promise((resolve) => {
-    const video  = document.createElement('video');
-    const canvas = document.createElement('canvas');
-    const ctx    = canvas.getContext('2d', { willReadFrequently: true });
+    const video   = document.createElement('video');
+    // Two canvases: 320px for black frame luma, 80px for freeze (more stable averaging)
+    const canvas  = document.createElement('canvas');
+    const ctx     = canvas.getContext('2d', { willReadFrequently: true });
+    const fCanvas = document.createElement('canvas');
+    const fCtx    = fCanvas.getContext('2d', { willReadFrequently: true });
+    fCanvas.width = 80; fCanvas.height = 45;
     const url    = URL.createObjectURL(file);
-    const BLACK_THRESHOLD  = 12;  // avg luma below this (0-255) = black frame
-    const FREEZE_THRESHOLD = 6;   // avg luma diff below this = freeze frame
-    const MIN_FREEZE_SECS  = 1.0; // minimum duration to report a freeze (1 second)
+    const BLACK_THRESHOLD  = 12; // avg luma below this = black frame
+    const FREEZE_THRESHOLD = 3;  // avg luma diff on 80x45 canvas; truly frozen ≈ 0–1, grain/noise ≈ 1–3, motion ≥ 5
+    const MIN_FREEZE_SECS  = 1.0;
 
     function secsToTC(s) {
       const fps = 25;
@@ -1475,10 +1488,25 @@ async function detectVideoIssuesBrowser(file, setStatus) {
       return `${p(h)}:${p(m)}:${p(sec)}:${p(f)}`;
     }
     function cleanup() { URL.revokeObjectURL(url); video.src = ''; }
+    function lumaAvg(d) {
+      let s = 0;
+      for (let i = 0; i < d.length; i += 4) s += 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+      return s / (d.length / 4);
+    }
+    function lumaDiff(a, b) {
+      let s = 0;
+      for (let i = 0; i < a.length; i += 4) {
+        s += Math.abs((0.299*a[i] + 0.587*a[i+1] + 0.114*a[i+2]) -
+                      (0.299*b[i] + 0.587*b[i+1] + 0.114*b[i+2]));
+      }
+      return s / (a.length / 4);
+    }
 
     const blackTCs = [], freezeTCs = [];
     let blackStart = null, freezeStart = null;
-    let prevFrameData = null;
+    // Reference-frame approach: lock the first frame of a potential freeze and always
+    // compare subsequent frames against it — prevents codec-noise drift in chained comparisons
+    let freezeRef = null;
     let currentTime = 0, duration = 0, interval = 0.5;
 
     video.onloadedmetadata = () => {
@@ -1493,15 +1521,11 @@ async function detectVideoIssuesBrowser(file, setStatus) {
 
     video.onseeked = () => {
       if (!canvas.width) return;
+
+      // ── Black frame check (320px canvas) ──
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-
-      // ── Black frame check ──
-      let lumaSum = 0;
-      for (let i = 0; i < frameData.length; i += 16)
-        lumaSum += 0.299*frameData[i] + 0.587*frameData[i+1] + 0.114*frameData[i+2];
-      const avgLuma = lumaSum / (frameData.length / 16);
-      const dark = avgLuma < BLACK_THRESHOLD;
+      const dark = lumaAvg(frameData) < BLACK_THRESHOLD;
 
       if (dark && blackStart === null) {
         blackStart = currentTime;
@@ -1512,28 +1536,40 @@ async function detectVideoIssuesBrowser(file, setStatus) {
         blackStart = null;
       }
 
-      // ── Freeze frame check ──
-      if (prevFrameData) {
-        let diffSum = 0;
-        const len = Math.min(frameData.length, prevFrameData.length);
-        for (let i = 0; i < len; i += 16) {
-          const la = 0.299*prevFrameData[i] + 0.587*prevFrameData[i+1] + 0.114*prevFrameData[i+2];
-          const lb = 0.299*frameData[i]     + 0.587*frameData[i+1]     + 0.114*frameData[i+2];
-          diffSum += Math.abs(la - lb);
-        }
-        const avgDiff = diffSum / (len / 16);
-        const frozen = avgDiff < FREEZE_THRESHOLD;
+      // ── Freeze frame check (80x45 canvas, reference-frame comparison) ──
+      if (!dark) {
+        fCtx.drawImage(video, 0, 0, 80, 45);
+        const fData = fCtx.getImageData(0, 0, 80, 45).data;
 
-        if (frozen && !dark && freezeStart === null) {
-          freezeStart = Math.max(0, currentTime - interval);
-        } else if ((!frozen || dark) && freezeStart !== null) {
+        if (freezeRef) {
+          const diff = lumaDiff(freezeRef, fData);
+          if (diff < FREEZE_THRESHOLD) {
+            // Still matching reference → freeze
+            if (freezeStart === null) freezeStart = Math.max(0, currentTime - interval);
+            // Keep reference locked — do NOT update it
+          } else {
+            // Content changed → close any open freeze segment
+            if (freezeStart !== null) {
+              const dur = currentTime - freezeStart;
+              if (dur >= MIN_FREEZE_SECS) freezeTCs.push({ start:secsToTC(freezeStart), end:secsToTC(currentTime),
+                startSecs:freezeStart, endSecs:currentTime, duration:dur.toFixed(2)+'s' });
+              freezeStart = null;
+            }
+            freezeRef = fData.slice(); // new reference from current frame
+          }
+        } else {
+          freezeRef = fData.slice(); // seed first reference
+        }
+      } else {
+        // Dark frame — close open freeze and clear reference
+        if (freezeStart !== null) {
           const dur = currentTime - freezeStart;
           if (dur >= MIN_FREEZE_SECS) freezeTCs.push({ start:secsToTC(freezeStart), end:secsToTC(currentTime),
             startSecs:freezeStart, endSecs:currentTime, duration:dur.toFixed(2)+'s' });
           freezeStart = null;
         }
+        freezeRef = null;
       }
-      prevFrameData = frameData.slice();
 
       const pct = Math.round((currentTime / duration) * 8) + 82;
       if (setStatus) setStatus(`Scanning frames… ${Math.round(currentTime/duration*100)}%`, pct);
@@ -1770,6 +1806,7 @@ function vpSetup(file, report) {
   };
 
   document.getElementById('video-panel').classList.add('visible');
+  document.getElementById('vp-resize-handle').classList.add('visible');
 }
 
 function vpTogglePlay() {
@@ -1844,6 +1881,36 @@ function downloadPDF() {
 
 // ── Utils ──
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── Video panel resize handle ──
+(function() {
+  const handle = document.getElementById('vp-resize-handle');
+  const panel  = document.getElementById('video-panel');
+  let dragging = false, startX = 0, startW = 0;
+
+  handle.addEventListener('mousedown', e => {
+    if (!panel.classList.contains('visible')) return;
+    dragging = true;
+    startX   = e.clientX;
+    startW   = panel.offsetWidth;
+    handle.classList.add('dragging');
+    document.body.style.cursor     = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const newW = Math.max(220, Math.min(700, startW + (startX - e.clientX)));
+    panel.style.width = newW + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor     = '';
+    document.body.style.userSelect = '';
+  });
+})();
 
 // ── Poll every 4s ──
 loadJobs();
