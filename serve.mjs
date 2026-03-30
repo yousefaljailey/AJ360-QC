@@ -12,10 +12,13 @@ import multer from 'multer';
 import { analyzeFile } from './qc-analyzer.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = 3000;
-const JWT_SECRET = 'aj360-internal-jwt-2026-secret';
-const ADMIN_EMAIL = 'algaileyy@aljazeera.net';
-const DATA_DIR = path.join(__dirname, 'data');
+const PORT       = process.env.PORT || 3000;
+const JWT_SECRET  = process.env.JWT_SECRET || 'aj360-internal-jwt-2026-secret';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'algaileyy@aljazeera.net';
+// On Railway/Render mount a persistent volume at /data and /uploads.
+// Locally these fall back to the project directory.
+const PERSIST_ROOT = process.env.PERSIST_DIR || __dirname;
+const DATA_DIR     = path.join(PERSIST_ROOT, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'users.json');
 
 // Ensure data directory
@@ -77,8 +80,9 @@ const mailer = createTransport({
 });
 
 async function sendApprovalEmail(user) {
-  const approveUrl = `http://localhost:${PORT}/api/admin/approve/${user.id}`;
-  const rejectUrl  = `http://localhost:${PORT}/api/admin/reject/${user.id}`;
+  const BASE = process.env.BASE_URL || `http://localhost:${PORT}`;
+  const approveUrl = `${BASE}/api/admin/approve/${user.id}`;
+  const rejectUrl  = `${BASE}/api/admin/reject/${user.id}`;
   await mailer.sendMail({
     from: ADMIN_EMAIL,
     to:   ADMIN_EMAIL,
@@ -263,7 +267,7 @@ app.delete('/api/admin/users/:id', adminOnly, (req, res) => {
 // ═══════════════════════════════════════════
 
 const JOBS_FILE    = path.join(DATA_DIR, 'jobs.json');
-const UPLOADS_DIR  = path.join(__dirname, 'uploads');
+const UPLOADS_DIR  = path.join(PERSIST_ROOT, 'uploads');
 if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR);
 
 const storage = multer.diskStorage({
