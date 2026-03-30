@@ -1354,97 +1354,82 @@ async function analyzeFile(file) {
   };
 
   try {
-    const ext = file.name.split('.').pop().toLowerCase();
-    let miData = null;
+    // ── Upload to server and run full FFmpeg QC analysis ──────
+    setStatus('Uploading to server…', 2);
 
-    // ── Try MediaInfo.js (WebAssembly) ──────────────────────
-    setStatus('Scanning file structure…', 10);
-    try {
-      const miFactory = (window.MediaInfo && window.MediaInfo.default) || window.MediaInfo;
-      const mi = await miFactory({
-        format: 'JSON',
-        locateFile: () => '/lib/mediainfo/MediaInfoModule.wasm'
-      });
+    const formData = new FormData();
+    formData.append('file', file);
 
-      setStatus('Extracting metadata…', 50);
-      const resultStr = await mi.analyzeData(
-        () => file.size,
-        (chunkSize, offset) => new Promise((res, rej) => {
-          const reader = new FileReader();
-          reader.onload  = e => res(new Uint8Array(e.target.result));
-          reader.onerror = () => rej(new Error('File read error'));
-          reader.readAsArrayBuffer(file.slice(offset, offset + chunkSize));
-        })
-      );
-      try { mi.close(); } catch {}
-      miData = JSON.parse(resultStr);
-    } catch (miErr) {
-      console.warn('MediaInfo failed:', miErr);
-      // Fallback: HTML5 video element for browser-decodable formats
-      if (['mp4','mov','webm','mkv'].includes(ext)) {
+    // XHR for real upload progress tracking
+    const uploadResult = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/jobs/upload');
+      xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 60); // 0–60% for upload
+          setStatus(`Uploading… ${Math.round(e.loaded/e.total*100)}% (${fmtBytes(e.loaded)} / ${fmtBytes(e.total)})`, pct);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 401) { signOut(); reject(new Error('Session expired')); return; }
         try {
-          miData = await analyzeViaVideoElement(file);
-        } catch (vErr) { console.warn('Video element fallback failed:', vErr); }
-      }
-    }
+          const data = JSON.parse(xhr.responseText);
+          if (!xhr.ok && xhr.status !== 200) { reject(new Error(data.error || 'Upload failed')); return; }
+          resolve(data);
+        } catch { reject(new Error('Server error')); }
+      };
+      xhr.onerror = () => reject(new Error('Network error — is the server running?'));
+      xhr.send(formData);
+    });
 
-    setStatus('Building QC report…', 80);
-    // Attempt client-side frame scan for browser-decodable formats
-    // MXF cannot be decoded by browsers, so this only runs for MP4/MOV/WebM etc.
-    let bfData = null, ffData = null;
-    if (['mp4','mov','webm','mkv','m4v'].includes(ext)) {
-      try {
-        setStatus('Scanning frames for issues…', 82);
-        const videoIssues = await detectVideoIssuesBrowser(file, setStatus);
-        if (videoIssues) { bfData = videoIssues.blackFrames; ffData = videoIssues.freezeFrames; }
-      } catch (bfErr) { console.warn('Video frame scan failed:', bfErr); }
-    }
+    if (!uploadResult?.job?.id) throw new Error('Server did not return a job ID');
+    const jobId = uploadResult.job.id;
+    currentFile   = file;
+    currentJobId  = jobId;
 
-    // Attempt loudness measurement for small browser-decodable files
-    let loudData = null;
-    try {
-      loudData = await measureLoudnessBrowser(file, setStatus);
-    } catch (lErr) { console.warn('Loudness measurement error:', lErr); }
+    // ── Poll until FFmpeg analysis completes ─────────────────
+    setStatus('Running FFmpeg QC analysis…', 62);
+    const POLL_INTERVAL = 3000; // 3s
+    const MAX_WAIT_MS   = 30 * 60 * 1000; // 30 min timeout for very large files
+    const started       = Date.now();
+    let   dots          = 0;
 
-    setStatus('Building QC report…', 92);
-    const report = buildClientReport(file, miData, bfData, ffData, loudData);
+    const job = await new Promise((resolve, reject) => {
+      const poll = async () => {
+        try {
+          const j = await api('/api/jobs/' + jobId);
+          if (!j) { reject(new Error('Could not reach server')); return; }
 
-    setStatus('Saving…', 95);
-    const jobId = 'JB_' + Math.random().toString(16).slice(2,10).toUpperCase();
-    const job = {
-      id: jobId,
-      filename: file.name,
-      duration: report.fileInfo.duration || '—',
-      size: fmtBytes(file.size),
-      resolution: report.fileInfo.resolution || '—',
-      format: report.fileInfo.format || ext.toUpperCase(),
-      status: 'completed',
-      score: report.score,
-      aj360Pass: report.overallPass,
-      uploadedAt: new Date().toISOString(),
-      uploadedBy: user.email,
-      report
-    };
+          if (j.status === 'completed') { resolve(j); return; }
+          if (j.status === 'error')     { reject(new Error('Server-side QC analysis failed')); return; }
 
-    // Keep file reference for video preview panel
-    currentFile = file;
-    currentJobId = jobId;
+          if (Date.now() - started > MAX_WAIT_MS) { reject(new Error('Analysis timed out')); return; }
 
-    // Save to localStorage FIRST — survives Vercel cold starts
-    saveLocalJob(job);
-    // Also sync to API (best effort — Vercel /tmp is ephemeral)
-    await api('/api/jobs/client-upload', { method: 'POST', body: JSON.stringify({ job }) });
+          // Animate progress bar 62→95% while waiting
+          dots = (dots + 1) % 4;
+          const elapsed = Math.round((Date.now() - started) / 1000);
+          const pct = Math.min(95, 62 + Math.round(((Date.now() - started) / MAX_WAIT_MS) * 33));
+          setStatus(`Running FFmpeg QC analysis${'.'.repeat(dots + 1)} (${elapsed}s)`, pct);
+
+          setTimeout(poll, POLL_INTERVAL);
+        } catch (e) { reject(e); }
+      };
+      poll();
+    });
 
     setStatus('✓ Analysis complete', 100);
     setTimeout(async () => {
       closeUploadModal();
       await loadJobs();
       openReport(jobId);
-    }, 800);
+    }, 600);
 
   } catch (err) {
     const msg = (err && err.message) ? err.message : (typeof err === 'string' ? err : 'Unknown error');
-    setStatus('✗ Analysis failed: ' + msg, 0);
+    setStatus('✗ ' + msg, 0);
     showToast('Upload failed: ' + msg, 'error');
     console.error('analyzeFile error:', err);
   }
