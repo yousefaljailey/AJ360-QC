@@ -85,51 +85,102 @@ async function getMediaInfoData(filePath) {
   }
 }
 
-// ── COMBINED VIDEO PASS ───────────────────────────────────────────────────────
-// Single full read. Uses select filter to process every 5th frame (5fps from 25fps)
-// — 5× less filter CPU. Catches all events ≥ 0.2s which covers all broadcast thresholds.
-// cropdetect comes BEFORE the select so it still gets full-rate frames for accuracy.
-async function runVideoPass(filePath) {
+// ── VIDEO SEGMENT WORKER ──────────────────────────────────────────────────────
+// Analyzes one time segment of the file. Each worker runs as a separate FFmpeg
+// process, allowing multiple CPU cores to work in parallel.
+// Scale to 640x360 before filters: reduces filter CPU ~36x for UHD.
+// Detection quality is identical — black/freeze are visible at any resolution.
+async function runVideoSegment(filePath, startSec, durSec, segIdx) {
   try {
     const { stderr } = await runProcess(FFMPEG, [
-      '-threads', '0',
-      '-i', filePath,
-      // Process every 5th frame through black/freeze; cropdetect runs at full rate via split
-      '-vf', [
-        'split=2[vfull][vsample]',
-        '[vsample]select=not(mod(n\\,5)),setpts=N/5/TB,blackdetect=d=0.2:pix_th=0.10,freezedetect=n=-60dB:d=1[vdet]',
-        '[vfull]cropdetect=24:16:0[vcrop]'
-      ].join(';'),
-      '-map', '[vdet]', '-map', '[vcrop]',
+      '-threads', '2',            // 2 threads per segment — leaves room for siblings
+      '-ss', startSec.toFixed(3), // fast seek BEFORE -i (keyframe-accurate, fine for QC)
+      '-t',  durSec.toFixed(3),
+      '-i',  filePath,
+      '-vf', 'scale=640:360:flags=fast_bilinear,blackdetect=d=0.2:pix_th=0.10,freezedetect=n=-60dB:d=1',
       '-an', '-f', 'null', '-'
-    ], 7200000); // 2-hour timeout for 600 GB
+    ], 7200000);
 
-    // ── Parse black frames ────────────────────────────────────
     const blackTCs = [];
     for (const m of stderr.matchAll(/black_start:([\d.]+)\s+black_end:([\d.]+)\s+black_duration:([\d.]+)/g)) {
-      const startSecs = parseFloat(m[1]), endSecs = parseFloat(m[2]), dur = parseFloat(m[3]);
-      blackTCs.push({ start: secsToTC(startSecs), end: secsToTC(endSecs), startSecs, endSecs, duration: `${dur.toFixed(2)}s` });
+      // FFmpeg reports times relative to segment start when using -ss before -i
+      const s = parseFloat(m[1]) + startSec, e = parseFloat(m[2]) + startSec, d = parseFloat(m[3]);
+      blackTCs.push({ start: secsToTC(s), end: secsToTC(e), startSecs: s, endSecs: e, duration: `${d.toFixed(2)}s` });
     }
 
-    // ── Parse freeze frames ───────────────────────────────────
     const freezeTCs = [];
-    const fStarts = [...stderr.matchAll(/freeze_start:([\d.]+)/g)].map(m => parseFloat(m[1]));
-    const fEnds   = [...stderr.matchAll(/freeze_end:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    const fStarts = [...stderr.matchAll(/freeze_start:([\d.]+)/g)].map(m => parseFloat(m[1]) + startSec);
+    const fEnds   = [...stderr.matchAll(/freeze_end:([\d.]+)/g)].map(m => parseFloat(m[1]) + startSec);
     const fDurs   = [...stderr.matchAll(/freeze_duration:([\d.]+)/g)].map(m => parseFloat(m[1]));
     for (let i = 0; i < fStarts.length; i++) {
-      const startSecs = fStarts[i], endSecs = fEnds[i] ?? fStarts[i], dur = fDurs[i] ?? (endSecs - startSecs);
-      freezeTCs.push({ start: secsToTC(startSecs), end: secsToTC(endSecs), startSecs, endSecs, duration: `${dur.toFixed(2)}s` });
+      const s = fStarts[i], e = fEnds[i] ?? fStarts[i], d = fDurs[i] ?? (e - s);
+      freezeTCs.push({ start: secsToTC(s), end: secsToTC(e), startSecs: s, endSecs: e, duration: `${d.toFixed(2)}s` });
     }
 
-    // ── Parse cropdetect (pillarboxing) ───────────────────────
-    const crops = [...stderr.matchAll(/crop=(\d+):(\d+):(\d+):(\d+)/g)]
-      .map(m => ({ w: parseInt(m[1]), h: parseInt(m[2]), x: parseInt(m[3]), y: parseInt(m[4]) }));
-
-    return { blackTCs, freezeTCs, crops };
+    return { blackTCs, freezeTCs, segIdx, startSec, endSec: startSec + durSec };
   } catch (err) {
-    console.error('[QC] runVideoPass error:', err.message);
-    return { error: err.message, blackTCs: null, freezeTCs: null, crops: null };
+    console.error(`[QC] segment ${segIdx} error:`, err.message);
+    return { blackTCs: [], freezeTCs: [], segIdx, startSec, endSec: startSec + durSec, error: err.message };
   }
+}
+
+// ── PARALLEL VIDEO PASS ───────────────────────────────────────────────────────
+// Splits file into N segments and runs N FFmpeg workers in parallel.
+// Each worker uses its own CPU cores → N× decode throughput.
+// OVERLAP_SEC prevents missing events at segment boundaries.
+async function runVideoPass(filePath, duration) {
+  // Configurable via env var — tune to Railway CPU count
+  const NUM_WORKERS = Math.min(parseInt(process.env.QC_WORKERS || '4'), 8);
+  const OVERLAP_SEC = 3; // catch events spanning a boundary
+
+  const segLen = duration / NUM_WORKERS;
+  console.log(`[QC] Video: ${NUM_WORKERS} parallel workers × ${segLen.toFixed(0)}s each`);
+
+  const tasks = Array.from({ length: NUM_WORKERS }, (_, i) => {
+    const rawStart = i * segLen;
+    const rawEnd   = (i + 1) * segLen;
+    const start = Math.max(0, rawStart - (i > 0 ? OVERLAP_SEC : 0));
+    const end   = Math.min(duration, rawEnd + (i < NUM_WORKERS - 1 ? OVERLAP_SEC : 0));
+    return runVideoSegment(filePath, start, end - start, i);
+  });
+
+  const results = await Promise.all(tasks);
+
+  // Merge and deduplicate — remove events duplicated in overlap zones
+  const allBlack  = results.flatMap(r => r.blackTCs);
+  const allFreeze = results.flatMap(r => r.freezeTCs);
+
+  function dedupe(tcs) {
+    // Sort by startSecs, remove events that start within 1s of a previous one
+    const sorted = tcs.slice().sort((a, b) => a.startSecs - b.startSecs);
+    return sorted.filter((tc, i) => i === 0 || tc.startSecs > sorted[i - 1].startSecs + 1);
+  }
+
+  // Pillarboxing: 3-point seek (fast, file-size independent) — separate from segment workers
+  let crops = [];
+  try {
+    const seekPoints = [duration * 0.05, duration * 0.5, duration * 0.9];
+    for (const ss of seekPoints) {
+      const { stderr } = await runProcess(FFMPEG, [
+        '-threads', '2', '-ss', ss.toFixed(2), '-t', '10',
+        '-i', filePath,
+        '-vf', 'scale=640:360:flags=fast_bilinear,cropdetect=24:16:0',
+        '-frames:v', '30', '-an', '-f', 'null', '-'
+      ], 60000);
+      crops.push(...[...stderr.matchAll(/crop=(\d+):(\d+):(\d+):(\d+)/g)]
+        .map(m => ({ w: parseInt(m[1]), h: parseInt(m[2]), x: parseInt(m[3]), y: parseInt(m[4]) })));
+    }
+  } catch (err) { console.error('[QC] cropdetect error:', err.message); }
+
+  const hadError = results.some(r => r.error) && results.every(r => r.blackTCs.length === 0 && r.freezeTCs.length === 0);
+  const firstErr = results.find(r => r.error)?.error;
+
+  return {
+    blackTCs:  hadError ? null : dedupe(allBlack),
+    freezeTCs: hadError ? null : dedupe(allFreeze),
+    crops,
+    error: hadError ? firstErr : undefined
+  };
 }
 
 // ── COMBINED AUDIO PASS ───────────────────────────────────────────────────────
@@ -410,7 +461,7 @@ export async function analyzeFile(filePath, originalFilename) {
   console.log('[QC] Running 3-pass FFmpeg analysis…');
   const t0 = Date.now();
   const [videoPass, audioPass, glitchResult] = await Promise.all([
-    runVideoPass(filePath),
+    runVideoPass(filePath, duration),
     runAudioPass(filePath, duration),
     detectVisualGlitches(filePath, duration)
   ]);
