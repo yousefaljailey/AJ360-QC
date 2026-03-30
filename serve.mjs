@@ -12,17 +12,30 @@ import multer from 'multer';
 import { analyzeFile } from './qc-analyzer.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT       = process.env.PORT || 3000;
+const PORT        = process.env.PORT || 3000;
 const JWT_SECRET  = process.env.JWT_SECRET || 'aj360-internal-jwt-2026-secret';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'algaileyy@aljazeera.net';
-// On Railway/Render mount a persistent volume at /data and /uploads.
-// Locally these fall back to the project directory.
-const PERSIST_ROOT = process.env.PERSIST_DIR || __dirname;
-const DATA_DIR     = path.join(PERSIST_ROOT, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'users.json');
 
-// Ensure data directory
-if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR);
+// Resolve persistent root — prefer PERSIST_DIR env var (Railway volume), then
+// try the project directory, fall back to /tmp if the filesystem is read-only.
+function resolvePersistRoot() {
+  const candidates = [
+    process.env.PERSIST_DIR,
+    __dirname,
+    '/tmp/aj360'
+  ].filter(Boolean);
+  for (const dir of candidates) {
+    try {
+      mkdirSync(path.join(dir, 'data'), { recursive: true });
+      return dir;
+    } catch { /* try next */ }
+  }
+  return '/tmp/aj360';
+}
+const PERSIST_ROOT = resolvePersistRoot();
+const DATA_DIR  = path.join(PERSIST_ROOT, 'data');
+const DATA_FILE = path.join(DATA_DIR, 'users.json');
+console.log('[INFO] Persist root:', PERSIST_ROOT);
 
 function loadUsers() {
   if (!existsSync(DATA_FILE)) {
@@ -267,8 +280,19 @@ app.delete('/api/admin/users/:id', adminOnly, (req, res) => {
 // ═══════════════════════════════════════════
 
 const JOBS_FILE    = path.join(DATA_DIR, 'jobs.json');
-const UPLOADS_DIR  = path.join(PERSIST_ROOT, 'uploads');
-if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR);
+// Fall back to /tmp if PERSIST_DIR is not set and __dirname is read-only (Railway without volume)
+const UPLOADS_DIR  = (() => {
+  const preferred = path.join(PERSIST_ROOT, 'uploads');
+  try {
+    if (!existsSync(preferred)) mkdirSync(preferred, { recursive: true });
+    return preferred;
+  } catch {
+    const tmp = path.join('/tmp', 'aj360-uploads');
+    if (!existsSync(tmp)) mkdirSync(tmp, { recursive: true });
+    console.warn('[WARN] Could not create uploads dir at', preferred, '— using /tmp fallback');
+    return tmp;
+  }
+})();
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
