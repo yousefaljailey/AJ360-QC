@@ -309,28 +309,39 @@ function buildSeedReport(filename, score, aj360Pass, resolution, size) {
   // Per-check pass/fail based on file type
   const fmtOk    = isMxf;
   const resOk    = resolution === '3840x2160';
-  const fpsOk    = isMxf;                   // MOV assumed wrong fps
+  const fpsOk    = isMxf;
   const arOk     = true;
   const codecOk  = isMxf;
   const srOk     = isMxf;
   const tracksOk = isMxf;
   const loudVal  = isMxf ? -23.1 : -18.5;
   const loudOk   = loudVal >= -24 && loudVal <= -22;
+  const truePeakVal = isMxf ? -1.2 : -0.3;
 
-  // Black frames: SPORT_FINAL_MASTER has some, passing MXF has none
+  // Black frames: non-MXF has some
   const blackFrames = (!isMxf) ? [
-    { start:'00:04:11:12', end:'00:04:11:22', duration:'0.40s' },
-    { start:'00:22:07:03', end:'00:22:07:18', duration:'0.60s' },
-    { start:'01:01:44:00', end:'01:01:45:10', duration:'1.40s' },
+    { start:'00:04:11:12', end:'00:04:11:22', startSecs:251.48, duration:'0.40s' },
+    { start:'00:22:07:03', end:'00:22:07:18', startSecs:1327.12, duration:'0.60s' },
+    { start:'01:01:44:00', end:'01:01:45:10', startSecs:3704.0, duration:'1.40s' },
+  ] : [];
+
+  // Freeze frames: non-MXF gets one
+  const freezeFrames = (!isMxf) ? [
+    { start:'00:31:04:05', end:'00:31:06:10', startSecs:1864.2, duration:'2.20s' }
+  ] : [];
+
+  // Audio silence: poor-quality non-MXF has a long gap
+  const silenceTimecodes = (!isMxf) ? [
+    { start:'00:18:42:00', end:'00:18:51:00', startSecs:1122.0, duration:'9.00s' }
   ] : [];
 
   const checks = {
-    format:      { label:'File Format',          icon:'📄', pass:fmtOk,   value:ext.toUpperCase(),       expected:'MXF' },
-    resolution:  { label:'Resolution',           icon:'🖥',  pass:resOk,   value:resolution,              expected:'3840×2160 (UHD)' },
-    frameRate:   { label:'Frame Rate',           icon:'🎞',  pass:fpsOk,   value:isMxf?'25.00 fps':'29.97 fps', expected:'25 fps' },
-    aspectRatio: { label:'Aspect Ratio',         icon:'📐', pass:arOk,    value:'16:9',                  expected:'16:9' },
-    audioCodec:  { label:'Audio Codec',          icon:'🔊', pass:codecOk, value:isMxf?'PCM_S24LE':'AAC', expected:'PCM 24-bit (pcm_s24le)' },
-    sampleRate:  { label:'Sample Rate',          icon:'〰', pass:srOk,    value:isMxf?'48000 Hz':'44100 Hz', expected:'48,000 Hz' },
+    format:      { label:'File Format',          icon:'📄', pass:fmtOk,   value:ext.toUpperCase(),              expected:'MXF' },
+    resolution:  { label:'Resolution',           icon:'🖥',  pass:resOk,   value:resolution,                     expected:'3840×2160 (UHD)' },
+    frameRate:   { label:'Frame Rate',           icon:'🎞',  pass:fpsOk,   value:isMxf?'25.00 fps':'29.97 fps',  expected:'25 fps' },
+    aspectRatio: { label:'Aspect Ratio',         icon:'📐', pass:arOk,    value:'16:9',                         expected:'16:9' },
+    audioCodec:  { label:'Audio Codec',          icon:'🔊', pass:codecOk, value:isMxf?'PCM_S24LE':'AAC',        expected:'PCM 24-bit (pcm_s24le)' },
+    sampleRate:  { label:'Sample Rate',          icon:'〰', pass:srOk,    value:isMxf?'48000 Hz':'44100 Hz',    expected:'48,000 Hz' },
     audioTracks: {
       label:'Audio Tracks', icon:'🎚', pass:tracksOk,
       value: isMxf ? '4 tracks' : '2 tracks',
@@ -343,20 +354,90 @@ function buildSeedReport(filename, score, aj360Pass, resolution, size) {
         : [{index:1,label:'Left',expected:'Left',codec:'aac',sampleRate:'44100',channels:2,layout:'stereo',codecOk:false,sampleOk:false},
            {index:2,label:'Right',expected:'Right',codec:'aac',sampleRate:'44100',channels:2,layout:'stereo',codecOk:false,sampleOk:false}]
     },
-    loudness:    { label:'Loudness (EBU R128)', icon:'📊', pass:loudOk,  value:`${loudVal} LUFS`, expected:'-23 LUFS (±1 LU)', measured:loudVal, lra:'6.4 LU', truePeak:isMxf?'-1.2 dBFS':'-0.3 dBFS' },
-    blackFrames: { label:'Black Frames',        icon:'⬛', pass:blackFrames.length===0, count:blackFrames.length, timecodes:blackFrames, expected:'No black frames' },
+    monoAudio: {
+      label:'Mono Audio Tracks', icon:'🔉',
+      pass: isMxf,
+      value: isMxf ? '1-ch per track' : '2-ch per track (stereo)',
+      expected:'1 channel per track (mono PCM)'
+    },
+    avSync: {
+      label:'A/V Sync', icon:'🔄',
+      pass: isMxf,
+      value: isMxf ? 'In sync' : '140ms offset',
+      delta: isMxf ? 0 : 0.14,
+      expected:'Audio/video offset < 100ms'
+    },
+    bitrateCompliance: {
+      label:'Bitrate Compliance', icon:'📡',
+      pass: isMxf,
+      value: isMxf ? '185 Mbps' : '51 Mbps',
+      expected:'50–600 Mbps (UHD MXF)'
+    },
+    contentIntegrity: {
+      label:'Content Integrity', icon:'🎬',
+      pass: true,
+      value: isMxf ? 'Valid' : 'Valid',
+      expected:'Valid duration > 5s — no truncation'
+    },
+    loudness:    { label:'Loudness (EBU R128)', icon:'📊', pass:loudOk, value:`${loudVal} LUFS`, expected:'-23 LUFS (±1 LU)', measured:loudVal, lra:'6.4 LU', truePeak:`${truePeakVal} dBFS`, truePeakRaw:truePeakVal },
+    peakClipping: {
+      label:'Peak Clipping', icon:'⚡',
+      pass: truePeakVal <= -1.0,
+      value:`${truePeakVal} dBFS`,
+      truePeak: truePeakVal,
+      expected:'True Peak ≤ −1.0 dBFS'
+    },
+    blackFrames:  { label:'Black Frames',              icon:'⬛', pass:blackFrames.length===0,  count:blackFrames.length,  timecodes:blackFrames,  expected:'No black frames' },
+    freezeFrames: { label:'Freeze / Dropped Frames',   icon:'🧊', pass:freezeFrames.length===0, count:freezeFrames.length, timecodes:freezeFrames, expected:'No freeze frames' },
+    audioSilence: { label:'Audio Silence',             icon:'🔇', pass:silenceTimecodes.length===0, count:silenceTimecodes.length, timecodes:silenceTimecodes, expected:'No long silence (> 5s) mid-content' },
+    audioLevelConsistency: {
+      label:'Audio Level Consistency', icon:'📈',
+      pass: isMxf,
+      value: isMxf ? '4.2 LU StdDev' : '18.7 LU StdDev',
+      stdDev: isMxf ? 4.2 : 18.7,
+      expected:'StdDev < 15 LU between scenes'
+    },
+    pillarboxing: {
+      label:'Pillarboxing / Letterboxing', icon:'⬜',
+      pass: true,
+      value:'Full frame — no boxing',
+      expected:'Full frame — no pillarboxing or letterboxing'
+    },
+    visualGlitches: {
+      label:'Visual Glitches / Artifacts', icon:'🖼',
+      pass: isMxf,
+      value: isMxf ? 'Avg block score: 1.32' : 'Artifacts detected (avg: 14.81, peak: 38.20)',
+      blockScore: isMxf ? 1.32 : 14.81,
+      expected:'Block artifact score < 10'
+    },
+    subtitles: {
+      label:'Subtitles / Captions', icon:'💬',
+      pass: true,
+      value:'None detected',
+      count: 0, tracks: [],
+      expected:'Report subtitle tracks (informational)'
+    }
   };
+
+  const informationalKeys = new Set(['subtitles']);
+  const allChecks  = Object.entries(checks);
+  const failed     = allChecks.filter(([k, c]) => !c.pass && !informationalKeys.has(k));
+  const passed     = allChecks.filter(([, c]) => c.pass);
 
   return {
     checks, overallPass: aj360Pass,
     aj360Pass, score,
-    passedCount: Object.values(checks).filter(c=>c.pass).length,
-    failedCount:  Object.values(checks).filter(c=>!c.pass).length,
+    passedCount: passed.length,
+    failedCount:  failed.length,
+    mediaInfoAvailable: true,
     fileInfo: {
       format: ext.toUpperCase(), fileSize: size, resolution,
       videoCodec: isMxf ? 'DNXHD' : 'H.264',
-      bitRate: isMxf ? '185 Mbps' : '51.3 Mbps',
+      bitRate: isMxf ? '185 Mbps' : '51 Mbps',
       frameRate: isMxf ? '25.00 fps' : '29.97 fps',
+      bitDepth: isMxf ? '24-bit' : '8-bit',
+      timecode: isMxf ? '10:00:00:00' : '—',
+      wrapper: isMxf ? 'MXF OP1a' : ext.toUpperCase()
     },
     audioInfo: {
       codec: isMxf ? 'PCM_S24LE' : 'AAC',
@@ -364,7 +445,7 @@ function buildSeedReport(filename, score, aj360Pass, resolution, size) {
       channels: isMxf ? 4 : 2,
       tracks: checks.audioTracks.tracks,
       loudness: `${loudVal} LUFS`,
-      truePeak: isMxf ? '-1.2 dBFS' : '-0.3 dBFS',
+      truePeak: `${truePeakVal} dBFS`,
       lra: '6.4 LU'
     }
   };

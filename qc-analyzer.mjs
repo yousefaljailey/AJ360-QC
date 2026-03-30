@@ -1,5 +1,4 @@
 import { spawn } from 'child_process';
-import { promisify } from 'util';
 import ffprobeStatic from 'ffprobe-static';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 
@@ -39,7 +38,15 @@ function simplifyRatio(w, h) {
   return `${w / g}:${h / g}`;
 }
 
-// ── Run process and capture stderr ────────────────────────────
+// ── Standard deviation helper ─────────────────────────────────
+function stdDev(values) {
+  if (!values.length) return 0;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((acc, v) => acc + (v - mean) ** 2, 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+// ── Run process and capture output ────────────────────────────
 function runProcess(bin, args, timeoutMs = 300000) {
   return new Promise((resolve, reject) => {
     const proc = spawn(bin, args);
@@ -62,7 +69,30 @@ async function getMetadata(filePath) {
   return JSON.parse(stdout);
 }
 
-// ── 2. Black frame detection ──────────────────────────────────
+// ── 2. Get MediaInfo metadata (enriches ffprobe data) ─────────
+async function getMediaInfoData(filePath) {
+  try {
+    const { stdout, code } = await runProcess('mediainfo', [
+      '--Output=JSON', filePath
+    ], 60000);
+    if (code !== 0 || !stdout.trim()) return null;
+    const parsed = JSON.parse(stdout);
+    const tracks = parsed?.media?.track || [];
+    return {
+      general:   tracks.find(t => t['@type'] === 'General') || {},
+      video:     tracks.find(t => t['@type'] === 'Video') || {},
+      audios:    tracks.filter(t => t['@type'] === 'Audio'),
+      texts:     tracks.filter(t => t['@type'] === 'Text'),
+      menus:     tracks.filter(t => t['@type'] === 'Menu'),
+      others:    tracks.filter(t => !['General','Video','Audio','Text','Menu'].includes(t['@type'])),
+      raw:       tracks
+    };
+  } catch {
+    return null; // mediainfo not installed — fall back to ffprobe only
+  }
+}
+
+// ── 3. Black frame detection ──────────────────────────────────
 async function detectBlackFrames(filePath) {
   try {
     const { stderr } = await runProcess(FFMPEG, [
@@ -79,25 +109,17 @@ async function detectBlackFrames(filePath) {
       const endSecs   = parseFloat(m[2]);
       const dur       = parseFloat(m[3]);
       timecodes.push({
-        start:    secsToTC(startSecs),
-        end:      secsToTC(endSecs),
-        startSecs,
-        endSecs,
-        duration: `${dur.toFixed(2)}s`
+        start: secsToTC(startSecs), end: secsToTC(endSecs),
+        startSecs, endSecs, duration: `${dur.toFixed(2)}s`
       });
     }
-    return {
-      pass:      timecodes.length === 0,
-      count:     timecodes.length,
-      timecodes,
-      expected:  'No black frames'
-    };
+    return { pass: timecodes.length === 0, count: timecodes.length, timecodes, expected: 'No black frames' };
   } catch {
     return { pass: true, count: 0, timecodes: [], error: 'Analysis skipped', expected: 'No black frames' };
   }
 }
 
-// ── 3. Loudness measurement (EBU R128) ────────────────────────
+// ── 4. Loudness measurement (EBU R128) ────────────────────────
 async function measureLoudness(filePath) {
   try {
     const { stderr } = await runProcess(FFMPEG, [
@@ -106,25 +128,201 @@ async function measureLoudness(filePath) {
       '-f', 'null', '-'
     ], 600000);
 
-    // Parse summary block
-    const iMatch  = stderr.match(/\s+I:\s+([-\d.]+)\s+LUFS/);
+    const iMatch   = stderr.match(/\s+I:\s+([-\d.]+)\s+LUFS/);
     const lraMatch = stderr.match(/\s+LRA:\s+([-\d.]+)\s+LU/);
     const tpMatch  = stderr.match(/\s+True peak:\s+([-\d.]+)\s+dBFS/);
 
-    const measured = iMatch ? parseFloat(iMatch[1]) : null;
-    // Pass if within -24 to -22 LUFS (target: -23 ±1)
+    const measured    = iMatch  ? parseFloat(iMatch[1])  : null;
+    const truePeakRaw = tpMatch ? parseFloat(tpMatch[1]) : null;
     const pass = measured !== null ? (measured >= -24.0 && measured <= -22.0) : false;
 
     return {
       pass,
-      value:     measured !== null ? `${measured.toFixed(1)} LUFS` : '—',
+      value:       measured !== null ? `${measured.toFixed(1)} LUFS` : '—',
       measured,
-      expected:  '-23 LUFS (±1 LU)',
-      lra:       lraMatch ? `${lraMatch[1]} LU` : '—',
-      truePeak:  tpMatch  ? `${tpMatch[1]} dBFS` : '—'
+      expected:    '-23 LUFS (±1 LU)',
+      lra:         lraMatch ? `${lraMatch[1]} LU` : '—',
+      truePeak:    tpMatch  ? `${tpMatch[1]} dBFS` : '—',
+      truePeakRaw                          // raw float for peakClipping check
     };
   } catch {
-    return { pass: false, value: '—', expected: '-23 LUFS (±1 LU)', error: 'Analysis skipped' };
+    return { pass: false, value: '—', expected: '-23 LUFS (±1 LU)', error: 'Analysis skipped', truePeakRaw: null };
+  }
+}
+
+// ── 5. Freeze frame detection ─────────────────────────────────
+async function detectFreezeFrames(filePath) {
+  try {
+    const { stderr } = await runProcess(FFMPEG, [
+      '-i', filePath,
+      '-vf', 'freezedetect=n=-60dB:d=1',
+      '-an', '-f', 'null', '-'
+    ], 600000);
+
+    const timecodes = [];
+    const startRe = /freeze_start:([\d.]+)/g;
+    const endRe   = /freeze_end:([\d.]+)/g;
+    const durRe   = /freeze_duration:([\d.]+)/g;
+
+    const starts = [...stderr.matchAll(/freeze_start:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    const ends   = [...stderr.matchAll(/freeze_end:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    const durs   = [...stderr.matchAll(/freeze_duration:([\d.]+)/g)].map(m => parseFloat(m[1]));
+
+    for (let i = 0; i < starts.length; i++) {
+      const startSecs = starts[i];
+      const endSecs   = ends[i]   ?? startSecs;
+      const dur       = durs[i]   ?? (endSecs - startSecs);
+      timecodes.push({
+        start: secsToTC(startSecs), end: secsToTC(endSecs),
+        startSecs, endSecs, duration: `${dur.toFixed(2)}s`
+      });
+    }
+    return { pass: timecodes.length === 0, count: timecodes.length, timecodes, expected: 'No freeze frames' };
+  } catch {
+    return { pass: true, count: 0, timecodes: [], error: 'Analysis skipped', expected: 'No freeze frames' };
+  }
+}
+
+// ── 6. Audio silence detection ────────────────────────────────
+async function detectAudioSilence(filePath, totalDuration) {
+  try {
+    const { stderr } = await runProcess(FFMPEG, [
+      '-i', filePath,
+      '-af', 'silencedetect=n=-50dB:d=5',
+      '-vn', '-f', 'null', '-'
+    ], 600000);
+
+    const timecodes = [];
+    const starts = [...stderr.matchAll(/silence_start:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    const ends   = [...stderr.matchAll(/silence_end:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    const durs   = [...stderr.matchAll(/silence_duration:([\d.]+)/g)].map(m => parseFloat(m[1]));
+
+    for (let i = 0; i < starts.length; i++) {
+      const startSecs = starts[i];
+      const endSecs   = ends[i]  ?? startSecs;
+      const dur       = durs[i]  ?? (endSecs - startSecs);
+      // Ignore silence in first 2s or last 5s (normal heads/tails)
+      const isLeader  = startSecs < 2;
+      const isTail    = totalDuration > 0 && endSecs > (totalDuration - 5);
+      if (!isLeader && !isTail) {
+        timecodes.push({
+          start: secsToTC(startSecs), end: secsToTC(endSecs),
+          startSecs, endSecs, duration: `${dur.toFixed(2)}s`
+        });
+      }
+    }
+    return { pass: timecodes.length === 0, count: timecodes.length, timecodes, expected: 'No long silence (> 5s) mid-content' };
+  } catch {
+    return { pass: true, count: 0, timecodes: [], error: 'Analysis skipped', expected: 'No long silence (> 5s) mid-content' };
+  }
+}
+
+// ── 7. Audio level consistency (short-term loudness variance) ──
+async function detectAudioLevelConsistency(filePath) {
+  try {
+    const { stderr } = await runProcess(FFMPEG, [
+      '-i', filePath,
+      '-filter_complex', 'ebur128=framelog=verbose',
+      '-f', 'null', '-'
+    ], 600000);
+
+    // Parse M: (momentary) loudness lines
+    const mValues = [...stderr.matchAll(/\s+M:\s+([-\d.]+)/g)]
+      .map(m => parseFloat(m[1]))
+      .filter(v => v > -70); // exclude silence/below-floor readings
+
+    if (mValues.length < 10) {
+      return { pass: true, value: '—', expected: 'StdDev < 15 LU', error: 'Insufficient data' };
+    }
+
+    const sd = stdDev(mValues);
+    const pass = sd < 15;
+    return {
+      pass,
+      value:    `${sd.toFixed(1)} LU StdDev`,
+      stdDev:   sd,
+      expected: 'StdDev < 15 LU between scenes'
+    };
+  } catch {
+    return { pass: true, value: '—', expected: 'StdDev < 15 LU between scenes', error: 'Analysis skipped' };
+  }
+}
+
+// ── 8. Pillarboxing / letterboxing / color bars detection ──────
+async function detectPillarboxing(filePath, srcWidth, srcHeight) {
+  try {
+    const { stderr } = await runProcess(FFMPEG, [
+      '-i', filePath,
+      '-vf', 'cropdetect=24:16:0',
+      '-frames:v', '500',
+      '-an', '-f', 'null', '-'
+    ], 120000);
+
+    // Get the most commonly detected crop values
+    const crops = [...stderr.matchAll(/crop=(\d+):(\d+):(\d+):(\d+)/g)]
+      .map(m => ({ w: parseInt(m[1]), h: parseInt(m[2]), x: parseInt(m[3]), y: parseInt(m[4]) }));
+
+    if (!crops.length) {
+      return { pass: true, value: 'No boxing detected', expected: 'Full frame — no pillarboxing or letterboxing' };
+    }
+
+    // Use the most common crop (mode by width)
+    const wCounts = {};
+    crops.forEach(c => { wCounts[c.w] = (wCounts[c.w] || 0) + 1; });
+    const dominantW = parseInt(Object.entries(wCounts).sort((a, b) => b[1] - a[1])[0][0]);
+    const dominant  = crops.find(c => c.w === dominantW);
+
+    const widthMatch  = dominant.w  >= srcWidth  * 0.99;
+    const heightMatch = dominant.h  >= srcHeight * 0.99;
+    const pass = widthMatch && heightMatch;
+
+    const detectedRes = `${dominant.w}×${dominant.h}`;
+    const hasPillar   = dominant.x > 0 || dominant.w < srcWidth  * 0.98;
+    const hasLetter   = dominant.y > 0 || dominant.h < srcHeight * 0.98;
+    const type = hasPillar && hasLetter ? 'Pillarboxing + Letterboxing' : hasPillar ? 'Pillarboxing detected' : hasLetter ? 'Letterboxing detected' : 'None';
+
+    return {
+      pass,
+      value:       pass ? 'Full frame — no boxing' : `${type} (active: ${detectedRes})`,
+      detectedRes,
+      type,
+      expected:    'Full frame — no pillarboxing or letterboxing'
+    };
+  } catch {
+    return { pass: true, value: 'Analysis skipped', expected: 'Full frame — no pillarboxing or letterboxing', error: 'Analysis skipped' };
+  }
+}
+
+// ── 9. Visual glitches / block artifacts ─────────────────────
+async function detectVisualGlitches(filePath) {
+  try {
+    const { stderr } = await runProcess(FFMPEG, [
+      '-i', filePath,
+      '-vf', 'blockdetect=period_min=3:period_max=24:planes=0',
+      '-frames:v', '500',
+      '-an', '-f', 'null', '-'
+    ], 120000);
+
+    // blockdetect outputs: [Parsed_blockdetect_0 @ ...] pts:... pts_time:... block:X.XXXXXX
+    const scores = [...stderr.matchAll(/block:([\d.]+)/g)].map(m => parseFloat(m[1]));
+
+    if (!scores.length) {
+      return { pass: true, value: 'No artifacts detected', expected: 'Block artifact score < 10', blockScore: 0 };
+    }
+
+    const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const maxScore = Math.max(...scores);
+    const pass = avgScore < 10;
+
+    return {
+      pass,
+      value:     pass ? `Avg block score: ${avgScore.toFixed(2)}` : `Artifacts detected (avg: ${avgScore.toFixed(2)}, peak: ${maxScore.toFixed(2)})`,
+      blockScore: avgScore,
+      maxBlock:   maxScore,
+      expected:  'Block artifact score < 10'
+    };
+  } catch {
+    return { pass: true, value: 'Analysis skipped', expected: 'Block artifact score < 10', error: 'Analysis skipped' };
   }
 }
 
@@ -132,16 +330,20 @@ async function measureLoudness(filePath) {
 export async function analyzeFile(filePath, originalFilename) {
   const ext = originalFilename.split('.').pop().toLowerCase();
 
-  // Get metadata first (fast)
-  let meta;
+  // Get metadata (fast, run in parallel)
+  let meta, mediaInfo;
   try {
-    meta = await getMetadata(filePath);
+    [meta, mediaInfo] = await Promise.all([
+      getMetadata(filePath),
+      getMediaInfoData(filePath)
+    ]);
   } catch (err) {
     return { error: 'Could not read file: ' + err.message };
   }
 
   const videoStream  = meta.streams?.find(s => s.codec_type === 'video');
   const audioStreams  = meta.streams?.filter(s => s.codec_type === 'audio') || [];
+  const subtitleStreams = meta.streams?.filter(s => s.codec_type === 'subtitle' || s.codec_type === 'data') || [];
   const fmt           = meta.format;
 
   // Detect real FPS
@@ -177,93 +379,186 @@ export async function analyzeFile(filePath, originalFilename) {
     sampleOk:   s.sample_rate === '48000'
   }));
 
-  // ── Build checks ──────────────────────────────────────────
+  // Duration
+  const duration = parseFloat(fmt?.duration || '0');
+
+  // Bitrate (bps → Mbps)
+  const bitRateRaw = parseInt(fmt?.bit_rate || '0');
+  const bitRateMbps = bitRateRaw > 0 ? bitRateRaw / 1000000 : 0;
+
+  // ── FAST METADATA-DERIVED CHECKS ────────────────────────────
   const checks = {
     format: {
-      label:    'File Format',
-      pass:     ext === 'mxf',
-      value:    ext.toUpperCase(),
-      expected: 'MXF',
-      icon:     '📄'
+      label: 'File Format', icon: '📄',
+      pass:  ext === 'mxf',
+      value: ext.toUpperCase(), expected: 'MXF'
     },
     resolution: {
-      label:    'Resolution',
-      pass:     width === 3840 && height === 2160,
-      value:    res,
-      expected: '3840×2160 (UHD)',
-      icon:     '🖥'
+      label: 'Resolution', icon: '🖥',
+      pass:  width === 3840 && height === 2160,
+      value: res, expected: '3840×2160 (UHD)'
     },
     frameRate: {
-      label:    'Frame Rate',
-      pass:     Math.abs(fps - 25) < 0.1,
-      value:    fps > 0 ? `${fps.toFixed(2)} fps` : '—',
-      expected: '25 fps',
-      icon:     '🎞'
+      label: 'Frame Rate', icon: '🎞',
+      pass:  Math.abs(fps - 25) < 0.1,
+      value: fps > 0 ? `${fps.toFixed(2)} fps` : '—', expected: '25 fps'
     },
     aspectRatio: {
-      label:    'Aspect Ratio',
-      pass:     aspectRatio === '16:9',
-      value:    aspectRatio,
-      expected: '16:9',
-      icon:     '📐'
+      label: 'Aspect Ratio', icon: '📐',
+      pass:  aspectRatio === '16:9',
+      value: aspectRatio, expected: '16:9'
     },
     audioCodec: {
-      label:    'Audio Codec',
-      pass:     audioStreams.length > 0 && audioStreams.every(s => isPCM24(s.codec_name)),
-      value:    audioCodecNames.length > 0 ? [...new Set(audioCodecNames)].join(', ').toUpperCase() : 'None',
-      expected: 'PCM 24-bit (pcm_s24le)',
-      icon:     '🔊'
+      label: 'Audio Codec', icon: '🔊',
+      pass:  audioStreams.length > 0 && audioStreams.every(s => isPCM24(s.codec_name)),
+      value: audioCodecNames.length > 0 ? [...new Set(audioCodecNames)].join(', ').toUpperCase() : 'None',
+      expected: 'PCM 24-bit (pcm_s24le)'
     },
     sampleRate: {
-      label:    'Sample Rate',
-      pass:     audioStreams.length > 0 && audioStreams.every(s => s.sample_rate === '48000'),
-      value:    audioStreams[0]?.sample_rate ? audioStreams[0].sample_rate + ' Hz' : '—',
-      expected: '48,000 Hz',
-      icon:     '〰'
+      label: 'Sample Rate', icon: '〰',
+      pass:  audioStreams.length > 0 && audioStreams.every(s => s.sample_rate === '48000'),
+      value: audioStreams[0]?.sample_rate ? audioStreams[0].sample_rate + ' Hz' : '—',
+      expected: '48,000 Hz'
     },
     audioTracks: {
-      label:    'Audio Tracks',
-      pass:     audioStreams.length === 4 && trackDetails.every(t => t.codecOk && t.sampleOk),
-      value:    `${audioStreams.length} track${audioStreams.length !== 1 ? 's' : ''}`,
+      label: 'Audio Tracks', icon: '🎚',
+      pass:  audioStreams.length === 4 && trackDetails.every(t => t.codecOk && t.sampleOk),
+      value: `${audioStreams.length} track${audioStreams.length !== 1 ? 's' : ''}`,
       expected: '4 tracks: Left / Right / Left Mix Minus / Right Mix Minus',
-      tracks:   trackDetails,
-      icon:     '🎚'
-    }
+      tracks: trackDetails
+    },
+
+    // Mono audio — each PCM track in broadcast MXF must be single channel (mono)
+    monoAudio: {
+      label: 'Mono Audio Tracks', icon: '🔉',
+      pass:  audioStreams.length === 0 || audioStreams.every(s => (s.channels || 1) === 1),
+      value: audioStreams.length > 0
+        ? `${[...new Set(audioStreams.map(s => s.channels))].join('/')}-ch per track`
+        : '—',
+      expected: '1 channel per track (mono PCM)'
+    },
+
+    // A/V sync — compare stream start_time offsets
+    avSync: (() => {
+      const vStart = parseFloat(videoStream?.start_time || '0');
+      const aStart = parseFloat(audioStreams[0]?.start_time || '0');
+      const delta  = Math.abs(vStart - aStart);
+      const pass   = delta < 0.1; // 100ms threshold
+      return {
+        label: 'A/V Sync', icon: '🔄',
+        pass,
+        value:    delta < 0.001 ? 'In sync' : `${(delta * 1000).toFixed(0)}ms offset`,
+        delta,
+        expected: 'Audio/video offset < 100ms'
+      };
+    })(),
+
+    // Bitrate compliance — UHD MXF: 50–600 Mbps
+    bitrateCompliance: {
+      label: 'Bitrate Compliance', icon: '📡',
+      pass:  bitRateMbps === 0 || (bitRateMbps >= 50 && bitRateMbps <= 600),
+      value: bitRateMbps > 0 ? `${bitRateMbps.toFixed(0)} Mbps` : '—',
+      expected: '50–600 Mbps (UHD MXF)'
+    },
+
+    // Content integrity — valid duration present
+    contentIntegrity: (() => {
+      const miDuration = parseFloat(mediaInfo?.general?.Duration || '0') / 1000; // ms → s
+      const effectiveDuration = duration > 0 ? duration : miDuration;
+      const pass = effectiveDuration > 5; // must be at least 5 seconds
+      return {
+        label: 'Content Integrity', icon: '🎬',
+        pass,
+        value:    effectiveDuration > 0 ? formatDuration(effectiveDuration) : 'Unknown / truncated',
+        duration: effectiveDuration,
+        expected: 'Valid duration > 5s — no truncation'
+      };
+    })(),
+
+    // Subtitles — flag if unexpected subtitle/text tracks are present
+    subtitles: (() => {
+      const ffprobeSubs = subtitleStreams.length;
+      const miTexts     = mediaInfo?.texts?.length || 0;
+      const totalSubs   = Math.max(ffprobeSubs, miTexts);
+
+      const subDetails = subtitleStreams.map((s, i) => ({
+        index:    i + 1,
+        codec:    s.codec_name || '—',
+        language: s.tags?.language || 'und',
+        title:    s.tags?.title || `Track ${i + 1}`
+      }));
+      // Also pull from MediaInfo texts if ffprobe missed them
+      if (miTexts > ffprobeSubs && mediaInfo?.texts) {
+        mediaInfo.texts.forEach((t, i) => {
+          if (!subDetails.find(s => s.title === (t.Title || t.title))) {
+            subDetails.push({
+              index:    subDetails.length + 1,
+              codec:    t.Format || '—',
+              language: t.Language || 'und',
+              title:    t.Title || `MI Track ${i + 1}`
+            });
+          }
+        });
+      }
+      return {
+        label:   'Subtitles / Captions', icon: '💬',
+        pass:    true,         // presence is informational — not a fail
+        value:   totalSubs > 0 ? `${totalSubs} subtitle track${totalSubs !== 1 ? 's' : ''} found` : 'None detected',
+        count:   totalSubs,
+        tracks:  subDetails,
+        expected: 'Report subtitle tracks (informational)'
+      };
+    })()
   };
 
-  // ── Run expensive analysis in parallel ────────────────────
-  const [blackResult, loudResult] = await Promise.all([
+  // ── RUN EXPENSIVE FFmpeg ANALYSES IN PARALLEL ─────────────
+  const [blackResult, loudResult, freezeResult, silenceResult,
+         consistencyResult, pillarResult, glitchResult] = await Promise.all([
     detectBlackFrames(filePath),
-    measureLoudness(filePath)
+    measureLoudness(filePath),
+    detectFreezeFrames(filePath),
+    detectAudioSilence(filePath, duration),
+    detectAudioLevelConsistency(filePath),
+    detectPillarboxing(filePath, width, height),
+    detectVisualGlitches(filePath)
   ]);
 
-  checks.blackFrames = {
-    label:     'Black Frames',
-    icon:      '⬛',
-    ...blackResult
+  // Wire FFmpeg results into checks
+  checks.blackFrames = { label: 'Black Frames', icon: '⬛', ...blackResult };
+
+  checks.loudness = { label: 'Loudness (EBU R128)', icon: '📊', ...loudResult };
+
+  // Peak clipping — derived from True Peak captured inside measureLoudness
+  checks.peakClipping = {
+    label: 'Peak Clipping', icon: '⚡',
+    pass:  loudResult.truePeakRaw === null || loudResult.truePeakRaw <= -1.0,
+    value: loudResult.truePeakRaw !== null ? `${loudResult.truePeakRaw.toFixed(1)} dBFS` : '—',
+    truePeak: loudResult.truePeakRaw,
+    expected: 'True Peak ≤ −1.0 dBFS'
   };
-  checks.loudness = {
-    label:  'Loudness (EBU R128)',
-    icon:   '📊',
-    ...loudResult
-  };
 
-  // ── Score calculation ──────────────────────────────────────
-  const checkList   = Object.values(checks);
-  const failedChecks = checkList.filter(c => !c.pass);
-  const passedChecks = checkList.filter(c =>  c.pass);
+  checks.freezeFrames = { label: 'Freeze / Dropped Frames', icon: '🧊', ...freezeResult };
 
-  // Weighted: black frames and loudness are critical (2x weight)
-  const criticalFails = failedChecks.filter(c =>
-    ['blackFrames','loudness','audioCodec','audioTracks'].includes(
-      Object.keys(checks).find(k => checks[k] === c)
-    )
-  ).length;
-  const normalFails = failedChecks.length - criticalFails;
-  const deduction   = criticalFails * 15 + normalFails * 8;
-  const score       = Math.max(0, 100 - deduction);
+  checks.audioSilence = { label: 'Audio Silence', icon: '🔇', ...silenceResult };
 
-  const duration = parseFloat(fmt?.duration || '0');
+  checks.audioLevelConsistency = { label: 'Audio Level Consistency', icon: '📈', ...consistencyResult };
+
+  checks.pillarboxing = { label: 'Pillarboxing / Letterboxing', icon: '⬜', ...pillarResult };
+
+  checks.visualGlitches = { label: 'Visual Glitches / Artifacts', icon: '🖼', ...glitchResult };
+
+  // ── SCORE CALCULATION ────────────────────────────────────────
+  const criticalKeys = new Set(['blackFrames','loudness','audioCodec','audioTracks','peakClipping','avSync']);
+  const informationalKeys = new Set(['subtitles']); // never penalised
+
+  const checkEntries  = Object.entries(checks);
+  const failedChecks  = checkEntries.filter(([k, c]) => !c.pass && !informationalKeys.has(k));
+  const passedChecks  = checkEntries.filter(([, c]) => c.pass);
+
+  const criticalFails = failedChecks.filter(([k]) => criticalKeys.has(k)).length;
+  const normalFails   = failedChecks.length - criticalFails;
+  const deduction     = criticalFails * 15 + normalFails * 8;
+  const score         = Math.max(0, 100 - deduction);
 
   return {
     checks,
@@ -272,14 +567,19 @@ export async function analyzeFile(filePath, originalFilename) {
     score,
     passedCount:  passedChecks.length,
     failedCount:  failedChecks.length,
+    mediaInfoAvailable: mediaInfo !== null,
     fileInfo: {
-      format:     ext.toUpperCase(),
-      fileSize:   formatSize(parseInt(fmt?.size || '0')),
-      videoCodec: videoStream?.codec_name?.toUpperCase() || '—',
-      bitRate:    fmt?.bit_rate ? `${Math.round(parseInt(fmt.bit_rate) / 1000000)} Mbps` : '—',
-      duration:   formatDuration(duration),
-      frameRate:  fps > 0 ? `${fps.toFixed(2)} fps` : '—',
-      resolution: res
+      format:      ext.toUpperCase(),
+      fileSize:    formatSize(parseInt(fmt?.size || '0')),
+      videoCodec:  videoStream?.codec_name?.toUpperCase() || '—',
+      bitRate:     bitRateMbps > 0 ? `${bitRateMbps.toFixed(0)} Mbps` : '—',
+      duration:    formatDuration(duration),
+      frameRate:   fps > 0 ? `${fps.toFixed(2)} fps` : '—',
+      resolution:  res,
+      // MediaInfo enhancements
+      bitDepth:    mediaInfo?.video?.BitDepth ? `${mediaInfo.video.BitDepth}-bit` : videoStream?.bits_per_raw_sample ? `${videoStream.bits_per_raw_sample}-bit` : '—',
+      timecode:    mediaInfo?.general?.TimeCode_FirstFrame || mediaInfo?.others?.find(t => t.TimeCode_FirstFrame)?.TimeCode_FirstFrame || '—',
+      wrapper:     mediaInfo?.general?.Format_Commercial_IfAny || mediaInfo?.general?.Format || ext.toUpperCase()
     },
     audioInfo: {
       codec:      audioCodecNames[0]?.toUpperCase() || '—',

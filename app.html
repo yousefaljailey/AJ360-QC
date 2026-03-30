@@ -975,7 +975,14 @@ async function openReport(id) {
   scEl.className   = 'gauge-score' + (sc >= 90 ? '' : sc >= 70 ? ' mid' : ' lo');
 
   // Check summary pills
-  const checkKeys = ['format','resolution','frameRate','aspectRatio','audioCodec','sampleRate','audioTracks','loudness','blackFrames','freezeFrames'];
+  const checkKeys = [
+    'format','resolution','frameRate','aspectRatio',
+    'audioCodec','sampleRate','audioTracks','monoAudio',
+    'avSync','bitrateCompliance','contentIntegrity',
+    'loudness','peakClipping','blackFrames','freezeFrames',
+    'audioSilence','audioLevelConsistency',
+    'pillarboxing','visualGlitches','subtitles'
+  ];
   document.getElementById('rpt-gauge-bars').innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:6px">` +
     checkKeys.map(k => {
       const c = ch[k]; if (!c) return '';
@@ -1007,7 +1014,7 @@ async function openReport(id) {
           const leftBorder = isFail ? 'border-left:3px solid var(--fail)' : u ? 'border-left:3px solid var(--warn)' : 'border-left:3px solid transparent';
           const rowBg  = isFail ? 'background:rgba(239,68,68,0.04)' : '';
           const foundColor = u ? 'var(--muted)' : c.pass ? 'var(--pass)' : 'var(--fail)';
-          const monoKeys = ['format','resolution','frameRate','aspectRatio','audioCodec','sampleRate','loudness'];
+          const monoKeys = ['format','resolution','frameRate','aspectRatio','audioCodec','sampleRate','loudness','peakClipping','avSync','bitrateCompliance','monoAudio'];
           const mono = monoKeys.includes(k) ? 'font-family:monospace;font-size:11px' : 'font-size:12px';
           const badge = u
             ? `<span style="display:inline-block;background:rgba(245,158,11,0.1);color:var(--warn);border:1px solid rgba(245,158,11,0.3);padding:3px 10px;border-radius:5px;font-size:10px;font-weight:700;letter-spacing:0.04em">N/A</span>`
@@ -1117,6 +1124,106 @@ async function openReport(id) {
             </tr>`;
           }
 
+          // Audio silence timecode table
+          if (k === 'audioSilence' && !u && !c.pass && c.timecodes?.length) {
+            subRows = `<tr style="${rowBg};${leftBorder}">
+              <td></td>
+              <td colspan="4" style="padding:0 14px 12px 14px">
+                <table style="width:100%;border-collapse:collapse;border-radius:6px;overflow:hidden;border:1px solid rgba(59,130,246,0.25)">
+                  <thead>
+                    <tr style="background:rgba(59,130,246,0.08);border-bottom:1px solid rgba(59,130,246,0.2)">
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">#</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Timecode In</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Timecode Out</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Duration</td>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${c.timecodes.map((tc, i) => `<tr class="tc-seek-row" style="border-top:1px solid rgba(255,255,255,0.04)" onclick="seekVideoPlayer(${tc.startSecs})" onmouseover="this.style.background='rgba(59,130,246,0.07)'" onmouseout="this.style.background=''">
+                      <td style="padding:7px 10px;color:var(--muted);font-size:11px">${i+1}</td>
+                      <td style="padding:7px 10px;font-family:monospace;color:var(--proc);font-size:12px" title="Click to preview"><span style="opacity:0.6;margin-right:4px">▶</span>${tc.start}</td>
+                      <td style="padding:7px 10px;font-family:monospace;color:var(--proc);font-size:12px">${tc.end}</td>
+                      <td style="padding:7px 10px;color:var(--warn);font-size:12px">${tc.duration}</td>
+                    </tr>`).join('')}
+                  </tbody>
+                </table>
+              </td>
+            </tr>`;
+          }
+
+          // Peak clipping detail
+          if (k === 'peakClipping' && !u && !c.pass) {
+            subRows = `<tr style="${rowBg};${leftBorder}">
+              <td></td>
+              <td colspan="4" style="padding:0 14px 12px 14px">
+                <div style="font-size:11px;padding:8px 12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:5px">
+                  True Peak: <strong style="color:var(--fail)">${c.value}</strong>
+                  &nbsp;&nbsp;·&nbsp;&nbsp;
+                  <span style="color:var(--muted)">Limit: −1.0 dBFS · Risk: audible distortion on peak-limited broadcast chains</span>
+                </div>
+              </td>
+            </tr>`;
+          }
+
+          // Pillarboxing / letterboxing detail
+          if (k === 'pillarboxing' && !u && !c.pass) {
+            subRows = `<tr style="${rowBg};${leftBorder}">
+              <td></td>
+              <td colspan="4" style="padding:0 14px 12px 14px">
+                <div style="font-size:11px;padding:8px 12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:5px">
+                  Type: <strong style="color:var(--fail)">${c.type || 'Boxing detected'}</strong>
+                  &nbsp;&nbsp;·&nbsp;&nbsp;
+                  Active area: <span style="color:var(--warn);font-family:monospace">${c.detectedRes || '—'}</span>
+                  &nbsp;&nbsp;·&nbsp;&nbsp;
+                  <span style="color:var(--muted)">Expected: full ${ch.resolution?.value || '3840×2160'} frame</span>
+                </div>
+              </td>
+            </tr>`;
+          }
+
+          // Visual glitches detail
+          if (k === 'visualGlitches' && !u && !c.pass) {
+            subRows = `<tr style="${rowBg};${leftBorder}">
+              <td></td>
+              <td colspan="4" style="padding:0 14px 12px 14px">
+                <div style="font-size:11px;padding:8px 12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);border-radius:5px">
+                  Avg block score: <strong style="color:var(--fail)">${c.blockScore != null ? c.blockScore.toFixed(2) : '—'}</strong>
+                  &nbsp;&nbsp;·&nbsp;&nbsp;
+                  Peak: <span style="color:var(--warn)">${c.maxBlock != null ? c.maxBlock.toFixed(2) : '—'}</span>
+                  &nbsp;&nbsp;·&nbsp;&nbsp;
+                  <span style="color:var(--muted)">Threshold: 10.0 (DCT block compression artifacts)</span>
+                </div>
+              </td>
+            </tr>`;
+          }
+
+          // Subtitles informational detail (shown if tracks detected)
+          if (k === 'subtitles' && !u && c.count > 0 && c.tracks?.length) {
+            subRows = `<tr style="${rowBg};${leftBorder}">
+              <td></td>
+              <td colspan="4" style="padding:0 14px 12px 14px">
+                <table style="width:100%;border-collapse:collapse;border-radius:6px;overflow:hidden;border:1px solid var(--border)">
+                  <thead>
+                    <tr style="background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border)">
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">#</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Title</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Format</td>
+                      <td style="padding:6px 10px;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Language</td>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${c.tracks.map(t => `<tr style="border-top:1px solid rgba(255,255,255,0.04)">
+                      <td style="padding:7px 10px;color:var(--muted);font-size:11px">${t.index}</td>
+                      <td style="padding:7px 10px;font-size:12px">${t.title || '—'}</td>
+                      <td style="padding:7px 10px;font-family:monospace;font-size:10px">${(t.codec||'—').toUpperCase()}</td>
+                      <td style="padding:7px 10px;font-size:11px">${t.language || 'und'}</td>
+                    </tr>`).join('')}
+                  </tbody>
+                </table>
+              </td>
+            </tr>`;
+          }
+
           return `<tr style="border-bottom:1px solid var(--border);${leftBorder};${rowBg}">
             <td style="padding:12px 14px;color:var(--faint);font-size:11px">${idx+1}</td>
             <td style="padding:12px 14px">
@@ -1133,16 +1240,19 @@ async function openReport(id) {
       </tbody>
     </table>`;
 
-  // File info
+  // File info (enriched with MediaInfo fields)
   document.getElementById('rpt-fileinfo').innerHTML = tableRows([
     ['Filename',    esc(job.filename)],
-    ['Format',      fi.format || '—'],
+    ['Format',      fi.wrapper || fi.format || '—'],
     ['File Size',   fi.fileSize || job.size],
     ['Duration',    fi.duration || job.duration],
     ['Resolution',  fi.resolution || job.resolution],
     ['Frame Rate',  fi.frameRate || '—'],
     ['Video Codec', fi.videoCodec || '—'],
+    ['Bit Depth',   fi.bitDepth || '—'],
     ['Bit Rate',    fi.bitRate || '—'],
+    ['Timecode',    fi.timecode && fi.timecode !== '—' ? fi.timecode : '—'],
+    ['MediaInfo',   r.mediaInfoAvailable ? 'Available ✓' : 'Not installed'],
   ]);
 
   // Audio info
@@ -1152,7 +1262,7 @@ async function openReport(id) {
     ['Sample Rate',    ai.sampleRate || '—',   ch.sampleRate?.pass],
     ['Audio Tracks',   `${trackCount} tracks`, ch.audioTracks?.pass],
     ['Loudness (Int.)',ai.loudness || '—',      ch.loudness?.pass],
-    ['True Peak',      ai.truePeak || '—',     true],
+    ['True Peak',      ai.truePeak || '—',     ch.peakClipping?.pass],
     ['LRA',            ai.lra || '—',          true],
   ]);
 
