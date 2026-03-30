@@ -92,239 +92,110 @@ async function getMediaInfoData(filePath) {
   }
 }
 
-// ── 3. Black frame detection ──────────────────────────────────
-async function detectBlackFrames(filePath) {
+// ── COMBINED VIDEO PASS — blackdetect + freezedetect + cropdetect ────────────
+// One single FFmpeg read of the entire file replaces 3 separate passes.
+async function runVideoPass(filePath) {
   try {
     const { stderr } = await runProcess(FFMPEG, [
+      '-threads', '0',
       '-i', filePath,
-      '-vf', 'blackdetect=d=0.04:pix_th=0.10',
+      '-vf', 'blackdetect=d=0.04:pix_th=0.10,freezedetect=n=-60dB:d=1,cropdetect=24:16:0',
       '-an', '-f', 'null', '-'
-    ], 600000);
+    ], 1800000); // 30 min for large files
 
-    const timecodes = [];
-    const re = /black_start:([\d.]+)\s+black_end:([\d.]+)\s+black_duration:([\d.]+)/g;
-    let m;
-    while ((m = re.exec(stderr)) !== null) {
-      const startSecs = parseFloat(m[1]);
-      const endSecs   = parseFloat(m[2]);
-      const dur       = parseFloat(m[3]);
-      timecodes.push({
-        start: secsToTC(startSecs), end: secsToTC(endSecs),
-        startSecs, endSecs, duration: `${dur.toFixed(2)}s`
-      });
-    }
-    return { pass: timecodes.length === 0, count: timecodes.length, timecodes, expected: 'No black frames' };
-  } catch (err) {
-    console.error('[QC] detectBlackFrames error:', err.message);
-    return { pass: null, measured: false, count: 0, timecodes: [], value: 'FFmpeg error: ' + err.message, expected: 'No black frames' };
-  }
-}
-
-// ── 4. Loudness measurement (EBU R128) ────────────────────────
-async function measureLoudness(filePath) {
-  try {
-    const { stderr } = await runProcess(FFMPEG, [
-      '-i', filePath,
-      '-filter_complex', 'ebur128=peak=true',
-      '-f', 'null', '-'
-    ], 600000);
-
-    const iMatch   = stderr.match(/\s+I:\s+([-\d.]+)\s+LUFS/);
-    const lraMatch = stderr.match(/\s+LRA:\s+([-\d.]+)\s+LU/);
-    const tpMatch  = stderr.match(/\s+True peak:\s+([-\d.]+)\s+dBFS/);
-
-    const measured    = iMatch  ? parseFloat(iMatch[1])  : null;
-    const truePeakRaw = tpMatch ? parseFloat(tpMatch[1]) : null;
-    const pass = measured !== null ? (measured >= -24.0 && measured <= -22.0) : false;
-
-    return {
-      pass,
-      value:       measured !== null ? `${measured.toFixed(1)} LUFS` : '—',
-      measured,
-      expected:    '-23 LUFS (±1 LU)',
-      lra:         lraMatch ? `${lraMatch[1]} LU` : '—',
-      truePeak:    tpMatch  ? `${tpMatch[1]} dBFS` : '—',
-      truePeakRaw                          // raw float for peakClipping check
-    };
-  } catch (err) {
-    console.error('[QC] measureLoudness error:', err.message);
-    return { pass: null, measured: false, value: 'FFmpeg error: ' + err.message, expected: '-23 LUFS (±1 LU)', truePeakRaw: null };
-  }
-}
-
-// ── 5. Freeze frame detection ─────────────────────────────────
-async function detectFreezeFrames(filePath) {
-  try {
-    const { stderr } = await runProcess(FFMPEG, [
-      '-i', filePath,
-      '-vf', 'freezedetect=n=-60dB:d=1',
-      '-an', '-f', 'null', '-'
-    ], 600000);
-
-    const timecodes = [];
-    const startRe = /freeze_start:([\d.]+)/g;
-    const endRe   = /freeze_end:([\d.]+)/g;
-    const durRe   = /freeze_duration:([\d.]+)/g;
-
-    const starts = [...stderr.matchAll(/freeze_start:([\d.]+)/g)].map(m => parseFloat(m[1]));
-    const ends   = [...stderr.matchAll(/freeze_end:([\d.]+)/g)].map(m => parseFloat(m[1]));
-    const durs   = [...stderr.matchAll(/freeze_duration:([\d.]+)/g)].map(m => parseFloat(m[1]));
-
-    for (let i = 0; i < starts.length; i++) {
-      const startSecs = starts[i];
-      const endSecs   = ends[i]   ?? startSecs;
-      const dur       = durs[i]   ?? (endSecs - startSecs);
-      timecodes.push({
-        start: secsToTC(startSecs), end: secsToTC(endSecs),
-        startSecs, endSecs, duration: `${dur.toFixed(2)}s`
-      });
-    }
-    return { pass: timecodes.length === 0, count: timecodes.length, timecodes, expected: 'No freeze frames' };
-  } catch (err) {
-    console.error('[QC] detectFreezeFrames error:', err.message);
-    return { pass: null, measured: false, count: 0, timecodes: [], value: 'FFmpeg error: ' + err.message, expected: 'No freeze frames' };
-  }
-}
-
-// ── 6. Audio silence detection ────────────────────────────────
-async function detectAudioSilence(filePath, totalDuration) {
-  try {
-    const { stderr } = await runProcess(FFMPEG, [
-      '-i', filePath,
-      '-af', 'silencedetect=n=-50dB:d=5',
-      '-vn', '-f', 'null', '-'
-    ], 600000);
-
-    const timecodes = [];
-    const starts = [...stderr.matchAll(/silence_start:([\d.]+)/g)].map(m => parseFloat(m[1]));
-    const ends   = [...stderr.matchAll(/silence_end:([\d.]+)/g)].map(m => parseFloat(m[1]));
-    const durs   = [...stderr.matchAll(/silence_duration:([\d.]+)/g)].map(m => parseFloat(m[1]));
-
-    for (let i = 0; i < starts.length; i++) {
-      const startSecs = starts[i];
-      const endSecs   = ends[i]  ?? startSecs;
-      const dur       = durs[i]  ?? (endSecs - startSecs);
-      // Ignore silence in first 2s or last 5s (normal heads/tails)
-      const isLeader  = startSecs < 2;
-      const isTail    = totalDuration > 0 && endSecs > (totalDuration - 5);
-      if (!isLeader && !isTail) {
-        timecodes.push({
-          start: secsToTC(startSecs), end: secsToTC(endSecs),
-          startSecs, endSecs, duration: `${dur.toFixed(2)}s`
-        });
-      }
-    }
-    return { pass: timecodes.length === 0, count: timecodes.length, timecodes, expected: 'No long silence (> 5s) mid-content' };
-  } catch (err) {
-    console.error('[QC] detectAudioSilence error:', err.message);
-    return { pass: null, measured: false, count: 0, timecodes: [], value: 'FFmpeg error: ' + err.message, expected: 'No long silence (> 5s) mid-content' };
-  }
-}
-
-// ── 7. Audio level consistency (short-term loudness variance) ──
-async function detectAudioLevelConsistency(filePath) {
-  try {
-    const { stderr } = await runProcess(FFMPEG, [
-      '-i', filePath,
-      '-filter_complex', 'ebur128=framelog=verbose',
-      '-f', 'null', '-'
-    ], 600000);
-
-    // Parse M: (momentary) loudness lines
-    const mValues = [...stderr.matchAll(/\s+M:\s+([-\d.]+)/g)]
-      .map(m => parseFloat(m[1]))
-      .filter(v => v > -70); // exclude silence/below-floor readings
-
-    if (mValues.length < 10) {
-      return { pass: true, value: '—', expected: 'StdDev < 15 LU', error: 'Insufficient data' };
+    // ── Parse black frames ────────────────────────────────────
+    const blackTCs = [];
+    for (const m of stderr.matchAll(/black_start:([\d.]+)\s+black_end:([\d.]+)\s+black_duration:([\d.]+)/g)) {
+      const startSecs = parseFloat(m[1]), endSecs = parseFloat(m[2]), dur = parseFloat(m[3]);
+      blackTCs.push({ start: secsToTC(startSecs), end: secsToTC(endSecs), startSecs, endSecs, duration: `${dur.toFixed(2)}s` });
     }
 
-    const sd = stdDev(mValues);
-    const pass = sd < 15;
-    return {
-      pass,
-      value:    `${sd.toFixed(1)} LU StdDev`,
-      stdDev:   sd,
-      expected: 'StdDev < 15 LU between scenes'
-    };
-  } catch (err) {
-    console.error('[QC] detectAudioLevelConsistency error:', err.message);
-    return { pass: null, measured: false, value: 'FFmpeg error: ' + err.message, expected: 'StdDev < 15 LU between scenes' };
-  }
-}
+    // ── Parse freeze frames ───────────────────────────────────
+    const freezeTCs = [];
+    const fStarts = [...stderr.matchAll(/freeze_start:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    const fEnds   = [...stderr.matchAll(/freeze_end:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    const fDurs   = [...stderr.matchAll(/freeze_duration:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    for (let i = 0; i < fStarts.length; i++) {
+      const startSecs = fStarts[i], endSecs = fEnds[i] ?? fStarts[i], dur = fDurs[i] ?? (endSecs - startSecs);
+      freezeTCs.push({ start: secsToTC(startSecs), end: secsToTC(endSecs), startSecs, endSecs, duration: `${dur.toFixed(2)}s` });
+    }
 
-// ── 8. Pillarboxing / letterboxing / color bars detection ──────
-async function detectPillarboxing(filePath, srcWidth, srcHeight) {
-  try {
-    const { stderr } = await runProcess(FFMPEG, [
-      '-i', filePath,
-      '-vf', 'cropdetect=24:16:0',
-      '-frames:v', '500',
-      '-an', '-f', 'null', '-'
-    ], 120000);
-
-    // Get the most commonly detected crop values
+    // ── Parse cropdetect (pillarboxing) ───────────────────────
     const crops = [...stderr.matchAll(/crop=(\d+):(\d+):(\d+):(\d+)/g)]
       .map(m => ({ w: parseInt(m[1]), h: parseInt(m[2]), x: parseInt(m[3]), y: parseInt(m[4]) }));
 
-    if (!crops.length) {
-      return { pass: true, value: 'No boxing detected', expected: 'Full frame — no pillarboxing or letterboxing' };
-    }
-
-    // Use the most common crop (mode by width)
-    const wCounts = {};
-    crops.forEach(c => { wCounts[c.w] = (wCounts[c.w] || 0) + 1; });
-    const dominantW = parseInt(Object.entries(wCounts).sort((a, b) => b[1] - a[1])[0][0]);
-    const dominant  = crops.find(c => c.w === dominantW);
-
-    const widthMatch  = dominant.w  >= srcWidth  * 0.99;
-    const heightMatch = dominant.h  >= srcHeight * 0.99;
-    const pass = widthMatch && heightMatch;
-
-    const detectedRes = `${dominant.w}×${dominant.h}`;
-    const hasPillar   = dominant.x > 0 || dominant.w < srcWidth  * 0.98;
-    const hasLetter   = dominant.y > 0 || dominant.h < srcHeight * 0.98;
-    const type = hasPillar && hasLetter ? 'Pillarboxing + Letterboxing' : hasPillar ? 'Pillarboxing detected' : hasLetter ? 'Letterboxing detected' : 'None';
-
-    return {
-      pass,
-      value:       pass ? 'Full frame — no boxing' : `${type} (active: ${detectedRes})`,
-      detectedRes,
-      type,
-      expected:    'Full frame — no pillarboxing or letterboxing'
-    };
+    return { blackTCs, freezeTCs, crops };
   } catch (err) {
-    console.error('[QC] detectPillarboxing error:', err.message);
-    return { pass: null, measured: false, value: 'FFmpeg error: ' + err.message, expected: 'Full frame — no pillarboxing or letterboxing' };
+    console.error('[QC] runVideoPass error:', err.message);
+    return { error: err.message, blackTCs: null, freezeTCs: null, crops: null };
   }
 }
 
-// ── 9. Visual glitches / block artifacts ─────────────────────
+// ── COMBINED AUDIO PASS — ebur128 (loudness + level consistency) + silencedetect ──
+// One single FFmpeg read of the entire audio replaces 3 separate passes.
+async function runAudioPass(filePath, totalDuration) {
+  try {
+    const { stderr } = await runProcess(FFMPEG, [
+      '-threads', '0',
+      '-i', filePath,
+      '-filter_complex', '[0:a]asplit=2[a1][a2];[a1]ebur128=peak=true:framelog=verbose[x];[a2]silencedetect=n=-50dB:d=5',
+      '-map', '[x]', '-f', 'null', '-'
+    ], 1800000);
+
+    // ── Parse EBU R128 loudness ───────────────────────────────
+    const iMatch   = stderr.match(/\s+I:\s+([-\d.]+)\s+LUFS/);
+    const lraMatch = stderr.match(/\s+LRA:\s+([-\d.]+)\s+LU/);
+    const tpMatch  = stderr.match(/\s+True peak:\s+([-\d.]+)\s+dBFS/);
+    const measured    = iMatch  ? parseFloat(iMatch[1])  : null;
+    const truePeakRaw = tpMatch ? parseFloat(tpMatch[1]) : null;
+
+    // ── Parse momentary loudness for level consistency ────────
+    const mValues = [...stderr.matchAll(/\s+M:\s+([-\d.]+)/g)]
+      .map(m => parseFloat(m[1])).filter(v => v > -70);
+    const sd = mValues.length >= 10 ? stdDev(mValues) : null;
+
+    // ── Parse silence ─────────────────────────────────────────
+    const silenceTCs = [];
+    const sStarts = [...stderr.matchAll(/silence_start:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    const sEnds   = [...stderr.matchAll(/silence_end:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    const sDurs   = [...stderr.matchAll(/silence_duration:([\d.]+)/g)].map(m => parseFloat(m[1]));
+    for (let i = 0; i < sStarts.length; i++) {
+      const startSecs = sStarts[i], endSecs = sEnds[i] ?? sStarts[i], dur = sDurs[i] ?? (endSecs - startSecs);
+      const isLeader = startSecs < 2;
+      const isTail   = totalDuration > 0 && endSecs > (totalDuration - 5);
+      if (!isLeader && !isTail)
+        silenceTCs.push({ start: secsToTC(startSecs), end: secsToTC(endSecs), startSecs, endSecs, duration: `${dur.toFixed(2)}s` });
+    }
+
+    return { measured, truePeakRaw, lraStr: lraMatch?.[1], tpStr: tpMatch?.[1], sd, silenceTCs };
+  } catch (err) {
+    console.error('[QC] runAudioPass error:', err.message);
+    return { error: err.message };
+  }
+}
+
+// ── SAMPLE PASS — blockdetect on first 500 frames only ───────────────────────
 async function detectVisualGlitches(filePath) {
   try {
     const { stderr } = await runProcess(FFMPEG, [
+      '-threads', '0',
       '-i', filePath,
       '-vf', 'blockdetect=period_min=3:period_max=24:planes=0',
       '-frames:v', '500',
       '-an', '-f', 'null', '-'
     ], 120000);
 
-    // blockdetect outputs: [Parsed_blockdetect_0 @ ...] pts:... pts_time:... block:X.XXXXXX
     const scores = [...stderr.matchAll(/block:([\d.]+)/g)].map(m => parseFloat(m[1]));
-
-    if (!scores.length) {
+    if (!scores.length)
       return { pass: true, value: 'No artifacts detected', expected: 'Block artifact score < 10', blockScore: 0 };
-    }
 
     const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
     const maxScore = Math.max(...scores);
     const pass = avgScore < 10;
-
     return {
       pass,
       value:     pass ? `Avg block score: ${avgScore.toFixed(2)}` : `Artifacts detected (avg: ${avgScore.toFixed(2)}, peak: ${maxScore.toFixed(2)})`,
-      blockScore: avgScore,
-      maxBlock:   maxScore,
+      blockScore: avgScore, maxBlock: maxScore,
       expected:  'Block artifact score < 10'
     };
   } catch (err) {
@@ -521,41 +392,101 @@ export async function analyzeFile(filePath, originalFilename) {
     })()
   };
 
-  // ── RUN EXPENSIVE FFmpeg ANALYSES IN PARALLEL ─────────────
-  console.log('[QC] Running FFmpeg analyses in parallel…');
-  const [blackResult, loudResult, freezeResult, silenceResult,
-         consistencyResult, pillarResult, glitchResult] = await Promise.all([
-    detectBlackFrames(filePath),
-    measureLoudness(filePath),
-    detectFreezeFrames(filePath),
-    detectAudioSilence(filePath, duration),
-    detectAudioLevelConsistency(filePath),
-    detectPillarboxing(filePath, width, height),
+  // ── 2 COMBINED PASSES + 1 SAMPLE PASS (replaces 7 separate FFmpeg reads) ──
+  // Video pass: blackdetect + freezedetect + cropdetect — one full file read
+  // Audio pass: ebur128 + silencedetect — one full file read
+  // Sample pass: blockdetect on first 500 frames — fast, separate
+  console.log('[QC] Running 3-pass FFmpeg analysis (was 7)…');
+  const t0 = Date.now();
+  const [videoPass, audioPass, glitchResult] = await Promise.all([
+    runVideoPass(filePath),
+    runAudioPass(filePath, duration),
     detectVisualGlitches(filePath)
   ]);
-  console.log('[QC] FFmpeg analyses complete | blackFrames:', blackResult.pass, '| loudness:', loudResult.pass, '| freeze:', freezeResult.pass);
+  console.log(`[QC] FFmpeg complete in ${((Date.now()-t0)/1000).toFixed(1)}s`);
 
-  // Wire FFmpeg results into checks
-  checks.blackFrames = { label: 'Black Frames', icon: '⬛', ...blackResult };
+  // ── Unpack video pass results ─────────────────────────────
+  const { blackTCs, freezeTCs, crops } = videoPass;
+  const videoErr = videoPass.error;
 
-  checks.loudness = { label: 'Loudness (EBU R128)', icon: '📊', ...loudResult };
+  checks.blackFrames = {
+    label: 'Black Frames', icon: '⬛',
+    pass:  blackTCs ? blackTCs.length === 0 : null,
+    measured: !videoErr,
+    count: blackTCs?.length ?? 0,
+    timecodes: blackTCs ?? [],
+    value: videoErr ? 'FFmpeg error: ' + videoErr : undefined,
+    expected: 'No black frames'
+  };
 
-  // Peak clipping — derived from True Peak captured inside measureLoudness
+  checks.freezeFrames = {
+    label: 'Freeze / Dropped Frames', icon: '🧊',
+    pass:  freezeTCs ? freezeTCs.length === 0 : null,
+    measured: !videoErr,
+    count: freezeTCs?.length ?? 0,
+    timecodes: freezeTCs ?? [],
+    value: videoErr ? 'FFmpeg error: ' + videoErr : undefined,
+    expected: 'No freeze frames'
+  };
+
+  // Pillarboxing from cropdetect results
+  const pillarResult = (() => {
+    if (videoErr || !crops) return { pass: null, measured: false, value: 'FFmpeg error: ' + videoErr, expected: 'Full frame — no pillarboxing or letterboxing' };
+    if (!crops.length) return { pass: true, value: 'No boxing detected', expected: 'Full frame — no pillarboxing or letterboxing' };
+    const wCounts = {};
+    crops.forEach(c => { wCounts[c.w] = (wCounts[c.w] || 0) + 1; });
+    const dominantW = parseInt(Object.entries(wCounts).sort((a, b) => b[1] - a[1])[0][0]);
+    const dominant  = crops.find(c => c.w === dominantW);
+    const pass = dominant.w >= width * 0.99 && dominant.h >= height * 0.99;
+    const detectedRes = `${dominant.w}×${dominant.h}`;
+    const hasPillar = dominant.x > 0 || dominant.w < width  * 0.98;
+    const hasLetter = dominant.y > 0 || dominant.h < height * 0.98;
+    const type = hasPillar && hasLetter ? 'Pillarboxing + Letterboxing' : hasPillar ? 'Pillarboxing detected' : hasLetter ? 'Letterboxing detected' : 'None';
+    return { pass, value: pass ? 'Full frame — no boxing' : `${type} (active: ${detectedRes})`, detectedRes, type, expected: 'Full frame — no pillarboxing or letterboxing' };
+  })();
+  checks.pillarboxing = { label: 'Pillarboxing / Letterboxing', icon: '⬜', ...pillarResult };
+
+  // ── Unpack audio pass results ─────────────────────────────
+  const { measured, truePeakRaw, lraStr, tpStr, sd, silenceTCs } = audioPass;
+  const audioErr = audioPass.error;
+
+  const loudPass = measured !== null ? (measured >= -24.0 && measured <= -22.0) : null;
+  checks.loudness = {
+    label: 'Loudness (EBU R128)', icon: '📊',
+    pass:  audioErr ? null : loudPass,
+    measured: !audioErr ? measured : false,
+    value: audioErr ? 'FFmpeg error: ' + audioErr : (measured !== null ? `${measured.toFixed(1)} LUFS` : '—'),
+    expected: '-23 LUFS (±1 LU)',
+    lra:      lraStr ? `${lraStr} LU` : '—',
+    truePeak: tpStr  ? `${tpStr} dBFS` : '—',
+    truePeakRaw: truePeakRaw ?? null
+  };
+
   checks.peakClipping = {
     label: 'Peak Clipping', icon: '⚡',
-    pass:  loudResult.truePeakRaw === null || loudResult.truePeakRaw <= -1.0,
-    value: loudResult.truePeakRaw !== null ? `${loudResult.truePeakRaw.toFixed(1)} dBFS` : '—',
-    truePeak: loudResult.truePeakRaw,
+    pass:  truePeakRaw === null ? null : truePeakRaw <= -1.0,
+    value: truePeakRaw !== null ? `${truePeakRaw.toFixed(1)} dBFS` : (audioErr ? 'FFmpeg error: ' + audioErr : '—'),
+    truePeak: truePeakRaw,
     expected: 'True Peak ≤ −1.0 dBFS'
   };
 
-  checks.freezeFrames = { label: 'Freeze / Dropped Frames', icon: '🧊', ...freezeResult };
+  checks.audioSilence = {
+    label: 'Audio Silence', icon: '🔇',
+    pass:  silenceTCs ? silenceTCs.length === 0 : null,
+    measured: !audioErr,
+    count: silenceTCs?.length ?? 0,
+    timecodes: silenceTCs ?? [],
+    value: audioErr ? 'FFmpeg error: ' + audioErr : undefined,
+    expected: 'No long silence (> 5s) mid-content'
+  };
 
-  checks.audioSilence = { label: 'Audio Silence', icon: '🔇', ...silenceResult };
-
-  checks.audioLevelConsistency = { label: 'Audio Level Consistency', icon: '📈', ...consistencyResult };
-
-  checks.pillarboxing = { label: 'Pillarboxing / Letterboxing', icon: '⬜', ...pillarResult };
+  checks.audioLevelConsistency = {
+    label: 'Audio Level Consistency', icon: '📈',
+    pass:  sd === null ? null : sd < 15,
+    value: sd !== null ? `${sd.toFixed(1)} LU StdDev` : (audioErr ? 'FFmpeg error: ' + audioErr : 'Insufficient data'),
+    stdDev: sd,
+    expected: 'StdDev < 15 LU between scenes'
+  };
 
   checks.visualGlitches = { label: 'Visual Glitches / Artifacts', icon: '🖼', ...glitchResult };
 
