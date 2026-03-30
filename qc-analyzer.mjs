@@ -148,8 +148,10 @@ async function runVideoPass(filePath, duration) {
   } catch { /* ignore — use duration heuristic */ }
   const fileSizeGB = fileSizeBytes / 1e9;
 
-  // Configurable via env var — set QC_WORKERS to match Railway vCPU count
-  const MAX_WORKERS = Math.min(parseInt(process.env.QC_WORKERS || '4'), 16);
+  // Default 2 workers — safe for Railway Hobby (512MB–1GB RAM).
+  // Each FFmpeg worker uses ~200-400MB RAM. Set QC_WORKERS env var higher
+  // (e.g. 4 or 8) only if your Railway plan has enough RAM (≥2 GB).
+  const MAX_WORKERS = Math.min(parseInt(process.env.QC_WORKERS || '2'), 16);
 
   // Worker/thread allocation strategy:
   //   Small files (< 5 GB, < 10 min): 1 worker with all CPU threads (fastest for short content)

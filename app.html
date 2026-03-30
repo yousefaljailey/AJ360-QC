@@ -1360,29 +1360,46 @@ async function analyzeFile(file) {
     const formData = new FormData();
     formData.append('file', file);
 
-    // XHR for real upload progress tracking
+    // XHR upload with automatic retry on transient network errors (Railway redeploy, etc.)
     const uploadResult = await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/jobs/upload');
-      xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+      let uploadAttempt = 0;
+      const MAX_UPLOAD_RETRIES = 3;
 
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const pct = Math.round((e.loaded / e.total) * 60); // 0–60% for upload
-          setStatus(`Uploading… ${Math.round(e.loaded/e.total*100)}% (${fmtBytes(e.loaded)} / ${fmtBytes(e.total)})`, pct);
-        }
-      };
+      function doUpload() {
+        uploadAttempt++;
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/jobs/upload');
+        xhr.setRequestHeader('Authorization', 'Bearer ' + token);
 
-      xhr.onload = () => {
-        if (xhr.status === 401) { signOut(); reject(new Error('Session expired')); return; }
-        try {
-          const data = JSON.parse(xhr.responseText);
-          if (!xhr.ok && xhr.status !== 200) { reject(new Error(data.error || 'Upload failed')); return; }
-          resolve(data);
-        } catch { reject(new Error('Server error')); }
-      };
-      xhr.onerror = () => reject(new Error('Network error — is the server running?'));
-      xhr.send(formData);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 60);
+            setStatus(`Uploading… ${Math.round(e.loaded/e.total*100)}% (${fmtBytes(e.loaded)} / ${fmtBytes(e.total)})`, pct);
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status === 401) { signOut(); reject(new Error('Session expired')); return; }
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (!xhr.ok && xhr.status !== 200) { reject(new Error(data.error || 'Upload failed')); return; }
+            resolve(data);
+          } catch { reject(new Error('Server error')); }
+        };
+
+        xhr.onerror = () => {
+          if (uploadAttempt < MAX_UPLOAD_RETRIES) {
+            const delay = uploadAttempt * 3000; // 3s, 6s backoff
+            setStatus(`Server unreachable — retrying in ${delay/1000}s… (attempt ${uploadAttempt}/${MAX_UPLOAD_RETRIES})`, 0);
+            setTimeout(doUpload, delay);
+          } else {
+            reject(new Error('Network error — server unreachable after 3 attempts. Check Railway deployment.'));
+          }
+        };
+
+        xhr.send(formData);
+      }
+      doUpload();
     });
 
     if (!uploadResult?.job?.id) throw new Error('Server did not return a job ID');
