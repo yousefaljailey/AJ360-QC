@@ -91,15 +91,20 @@ async function getMediaInfoData(filePath) {
 // Scale to 640x360 before filters: reduces filter CPU ~36x for UHD.
 // Detection quality is identical — black/freeze are visible at any resolution.
 async function runVideoSegment(filePath, startSec, durSec, segIdx) {
+  // For single-worker short files (durSec > 1e8 means "full file"), don't pass -t at all.
+  // For multi-segment: pre-input -ss is fast but can misfire on MP4 B-frames; we accept that
+  // because on short files we use 1 worker anyway and skip -ss entirely (startSec=0).
+  const isFullFile = durSec >= 1e8;
+  const args = [
+    '-threads', '2',
+    ...(!isFullFile && startSec > 0 ? ['-ss', startSec.toFixed(3)] : []),
+    '-i', filePath,
+    ...(isFullFile ? [] : ['-t', durSec.toFixed(3)]),
+    '-vf', 'scale=640:360:flags=fast_bilinear,blackdetect=d=0.2:pix_th=0.10,freezedetect=n=-60dB:d=1',
+    '-an', '-f', 'null', '-'
+  ];
   try {
-    const { stderr } = await runProcess(FFMPEG, [
-      '-threads', '2',            // 2 threads per segment — leaves room for siblings
-      '-ss', startSec.toFixed(3), // fast seek BEFORE -i (keyframe-accurate, fine for QC)
-      '-t',  durSec.toFixed(3),
-      '-i',  filePath,
-      '-vf', 'scale=640:360:flags=fast_bilinear,blackdetect=d=0.2:pix_th=0.10,freezedetect=n=-60dB:d=1',
-      '-an', '-f', 'null', '-'
-    ], 7200000);
+    const { stderr } = await runProcess(FFMPEG, args, 7200000);
 
     const blackTCs = [];
     for (const m of stderr.matchAll(/black_start:([\d.]+)\s+black_end:([\d.]+)\s+black_duration:([\d.]+)/g)) {
@@ -128,13 +133,39 @@ async function runVideoSegment(filePath, startSec, durSec, segIdx) {
 // Splits file into N segments and runs N FFmpeg workers in parallel.
 // Each worker uses its own CPU cores → N× decode throughput.
 // OVERLAP_SEC prevents missing events at segment boundaries.
+// For small files (< 5 GB or < 600s) we skip parallelism — a single worker is
+// faster because FFmpeg process spawn overhead exceeds decode savings.
 async function runVideoPass(filePath, duration) {
+  // Detect file size to decide how many workers make sense
+  let fileSizeBytes = 0;
+  try {
+    const { statSync } = await import('fs');
+    fileSizeBytes = statSync(filePath).size;
+  } catch { /* ignore — use duration heuristic */ }
+  const fileSizeGB = fileSizeBytes / 1e9;
+
   // Configurable via env var — tune to Railway CPU count
-  const NUM_WORKERS = Math.min(parseInt(process.env.QC_WORKERS || '4'), 8);
+  const MAX_WORKERS = Math.min(parseInt(process.env.QC_WORKERS || '4'), 8);
+
+  // Use 1 worker for small files: < 5 GB OR < 10 min duration
+  // Parallel workers only help when decode time >> spawn overhead (large MXF)
+  const NUM_WORKERS = (fileSizeGB >= 5 || duration >= 600)
+    ? MAX_WORKERS
+    : 1;
+
   const OVERLAP_SEC = 3; // catch events spanning a boundary
 
+  // Guard: if duration is unknown/0, run a single full-file pass (no -t limit)
+  if (duration <= 0) {
+    console.log('[QC] Video: duration unknown — single full-file pass');
+    const results = [await runVideoSegment(filePath, 0, 1e9, 0)]; // durSec=1e9 → FFmpeg reads until EOF
+    const crops = [];
+    const hadError = results[0].error != null && results[0].blackTCs.length === 0;
+    return { blackTCs: hadError ? null : results[0].blackTCs, freezeTCs: hadError ? null : results[0].freezeTCs, crops, error: hadError ? results[0].error : undefined };
+  }
+
   const segLen = duration / NUM_WORKERS;
-  console.log(`[QC] Video: ${NUM_WORKERS} parallel workers × ${segLen.toFixed(0)}s each`);
+  console.log(`[QC] Video: ${NUM_WORKERS} worker(s) × ${segLen.toFixed(0)}s (file: ${fileSizeGB.toFixed(1)} GB, dur: ${duration.toFixed(0)}s)`);
 
   const tasks = Array.from({ length: NUM_WORKERS }, (_, i) => {
     const rawStart = i * segLen;
