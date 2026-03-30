@@ -267,9 +267,15 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
 .vp-tc-item{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:6px;cursor:pointer;border:1px solid transparent;transition:all 0.15s;margin-bottom:3px}
 .vp-tc-item.black-issue:hover{background:rgba(239,68,68,0.08);border-color:rgba(239,68,68,0.25)}
 .vp-tc-item.freeze-issue:hover{background:rgba(245,158,11,0.08);border-color:rgba(245,158,11,0.25)}
+.vp-tc-item.pillar-issue:hover{background:rgba(168,85,247,0.08);border-color:rgba(168,85,247,0.3)}
+.vp-tc-item.glitch-issue:hover{background:rgba(234,88,12,0.08);border-color:rgba(234,88,12,0.3)}
+.vp-tc-item.sub-issue:hover{background:rgba(59,130,246,0.08);border-color:rgba(59,130,246,0.3)}
 .vp-tc-badge{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;flex-shrink:0;text-transform:uppercase;letter-spacing:0.04em}
 .vp-tc-badge.b{background:rgba(239,68,68,0.15);color:var(--fail)}
 .vp-tc-badge.f{background:rgba(245,158,11,0.15);color:var(--warn)}
+.vp-tc-badge.p{background:rgba(168,85,247,0.15);color:#c084fc}
+.vp-tc-badge.a{background:rgba(234,88,12,0.15);color:#fb923c}
+.vp-tc-badge.s{background:rgba(59,130,246,0.15);color:#60a5fa}
 .vp-tc-time{font-family:monospace;font-size:11px;color:var(--text);font-weight:500;flex:1}
 .vp-tc-dur{font-size:10px;color:var(--faint);flex-shrink:0}
 .tc-seek-row{cursor:pointer;transition:background 0.12s}
@@ -1834,20 +1840,59 @@ function vpSetup(file, report) {
   // Populate timecode issues list
   const ch = report?.checks || {};
   const issues = [];
+
+  // Timecoded events — black & freeze frames (sorted by time)
   if (ch.blackFrames?.timecodes?.length)
-    ch.blackFrames.timecodes.forEach(tc => issues.push({...tc, type:'black'}));
+    ch.blackFrames.timecodes.forEach(tc => issues.push({...tc, type:'black', sortKey: tc.startSecs}));
   if (ch.freezeFrames?.timecodes?.length)
-    ch.freezeFrames.timecodes.forEach(tc => issues.push({...tc, type:'freeze'}));
-  issues.sort((a, b) => a.startSecs - b.startSecs);
+    ch.freezeFrames.timecodes.forEach(tc => issues.push({...tc, type:'freeze', sortKey: tc.startSecs}));
+  issues.sort((a, b) => a.sortKey - b.sortKey);
+
+  // Non-timecoded detections — appended after sorted timecoded events
+  if (ch.pillarboxing?.pass === false) {
+    const label = ch.pillarboxing.type || 'Boxing detected';
+    const sub   = ch.pillarboxing.detectedRes ? `Active area: ${ch.pillarboxing.detectedRes}` : '';
+    // Show 3 sample points matching the seek points used during analysis
+    [0.05, 0.5, 0.9].forEach(pct => issues.push({ type:'pillar', seekPct:pct, label, sub }));
+  }
+  if (ch.visualGlitches?.pass === false) {
+    const score = ch.visualGlitches.blockScore != null ? ch.visualGlitches.blockScore.toFixed(1) : '?';
+    const peak  = ch.visualGlitches.maxBlock  != null ? ch.visualGlitches.maxBlock.toFixed(1)  : '?';
+    [0.05, 0.5, 0.9].forEach(pct => issues.push({
+      type:'glitch', seekPct:pct,
+      label: `Avg: ${score}  Peak: ${peak}`,
+      sub: `${Math.round(pct*100)}% mark`
+    }));
+  }
+  if (ch.subtitles?.count > 0 && ch.subtitles?.tracks?.length) {
+    ch.subtitles.tracks.forEach(t => issues.push({
+      type:'sub', seekPct:0,
+      label: [t.codec, t.language !== 'und' ? t.language.toUpperCase() : ''].filter(Boolean).join(' · ') || 'Unknown track',
+      sub: t.title || ''
+    }));
+  }
+
+  const typeMap = {
+    black:  { cls:'black-issue',  badge:'b', tag:'BLK', mono:true  },
+    freeze: { cls:'freeze-issue', badge:'f', tag:'FRZ', mono:true  },
+    pillar: { cls:'pillar-issue', badge:'p', tag:'PIL', mono:false },
+    glitch: { cls:'glitch-issue', badge:'a', tag:'ART', mono:false },
+    sub:    { cls:'sub-issue',    badge:'s', tag:'SUB', mono:false },
+  };
 
   const issueList = document.getElementById('vp-issue-list');
   issueList.innerHTML = issues.length
-    ? issues.map(tc => `
-      <div class="vp-tc-item ${tc.type==='black'?'black-issue':'freeze-issue'}" onclick="seekVideoPlayer(${tc.startSecs})">
-        <span class="vp-tc-badge ${tc.type==='black'?'b':'f'}">${tc.type==='black'?'BLK':'FRZ'}</span>
-        <span class="vp-tc-time">${tc.start}</span>
-        <span class="vp-tc-dur">${tc.duration}</span>
-      </div>`).join('')
+    ? issues.map(tc => {
+        const m = typeMap[tc.type];
+        const onclick = tc.startSecs != null
+          ? `onclick="seekVideoPlayer(${tc.startSecs})"`
+          : `onclick="vpSeekPct(${tc.seekPct})"`;
+        const timeEl = m.mono
+          ? `<span class="vp-tc-time">${tc.start}</span><span class="vp-tc-dur">${tc.duration}</span>`
+          : `<span class="vp-tc-time" style="font-family:inherit;font-size:10px;line-height:1.3">${tc.label}${tc.sub ? `<br><span style="color:var(--faint);font-size:9px">${tc.sub}</span>` : ''}</span>`;
+        return `<div class="vp-tc-item ${m.cls}" ${onclick}>
+          <span class="vp-tc-badge ${m.badge}">${m.tag}</span>${timeEl}</div>`;
+      }).join('')
     : '<div style="color:var(--faint);font-size:11px;padding:4px 0">No issues detected</div>';
 
   // Wire video events
@@ -1903,6 +1948,20 @@ function seekVideoPlayer(secs) {
   document.getElementById('video-panel').classList.add('visible');
   const seek = () => {
     video.currentTime = Math.max(0, Math.min(video.duration || 0, secs));
+    video.pause();
+    updateVPProgress();
+  };
+  if (video.readyState >= 1) { seek(); }
+  else { video.onloadedmetadata = seek; }
+}
+
+// Seek to a percentage of the video duration (for non-timecoded detections)
+function vpSeekPct(pct) {
+  const video = document.getElementById('previewVideo');
+  if (!video.src) return;
+  document.getElementById('video-panel').classList.add('visible');
+  const seek = () => {
+    video.currentTime = Math.max(0, (video.duration || 0) * pct);
     video.pause();
     updateVPProgress();
   };
