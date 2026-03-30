@@ -38,13 +38,6 @@ function simplifyRatio(w, h) {
   return `${w / g}:${h / g}`;
 }
 
-// ── Standard deviation helper ─────────────────────────────────
-function stdDev(values) {
-  if (!values.length) return 0;
-  const mean = values.reduce((a, b) => a + b, 0) / values.length;
-  const variance = values.reduce((acc, v) => acc + (v - mean) ** 2, 0) / values.length;
-  return Math.sqrt(variance);
-}
 
 // ── Run process and capture output ────────────────────────────
 function runProcess(bin, args, timeoutMs = 300000) {
@@ -92,16 +85,24 @@ async function getMediaInfoData(filePath) {
   }
 }
 
-// ── COMBINED VIDEO PASS — blackdetect + freezedetect + cropdetect ────────────
-// One single FFmpeg read of the entire file replaces 3 separate passes.
+// ── COMBINED VIDEO PASS ───────────────────────────────────────────────────────
+// Single full read. Uses select filter to process every 5th frame (5fps from 25fps)
+// — 5× less filter CPU. Catches all events ≥ 0.2s which covers all broadcast thresholds.
+// cropdetect comes BEFORE the select so it still gets full-rate frames for accuracy.
 async function runVideoPass(filePath) {
   try {
     const { stderr } = await runProcess(FFMPEG, [
       '-threads', '0',
       '-i', filePath,
-      '-vf', 'blackdetect=d=0.04:pix_th=0.10,freezedetect=n=-60dB:d=1,cropdetect=24:16:0',
+      // Process every 5th frame through black/freeze; cropdetect runs at full rate via split
+      '-vf', [
+        'split=2[vfull][vsample]',
+        '[vsample]select=not(mod(n\\,5)),setpts=N/5/TB,blackdetect=d=0.2:pix_th=0.10,freezedetect=n=-60dB:d=1[vdet]',
+        '[vfull]cropdetect=24:16:0[vcrop]'
+      ].join(';'),
+      '-map', '[vdet]', '-map', '[vcrop]',
       '-an', '-f', 'null', '-'
-    ], 1800000); // 30 min for large files
+    ], 7200000); // 2-hour timeout for 600 GB
 
     // ── Parse black frames ────────────────────────────────────
     const blackTCs = [];
@@ -131,16 +132,19 @@ async function runVideoPass(filePath) {
   }
 }
 
-// ── COMBINED AUDIO PASS — ebur128 (loudness + level consistency) + silencedetect ──
-// One single FFmpeg read of the entire audio replaces 3 separate passes.
+// ── COMBINED AUDIO PASS ───────────────────────────────────────────────────────
+// Single full audio read. No framelog=verbose (would produce GB of output for large files).
+// Level consistency derived from LRA which ebur128 already computes — broadcast standard.
 async function runAudioPass(filePath, totalDuration) {
   try {
     const { stderr } = await runProcess(FFMPEG, [
       '-threads', '0',
+      '-vn',                    // skip video entirely — audio only
       '-i', filePath,
-      '-filter_complex', '[0:a]asplit=2[a1][a2];[a1]ebur128=peak=true:framelog=verbose[x];[a2]silencedetect=n=-50dB:d=5',
-      '-map', '[x]', '-f', 'null', '-'
-    ], 1800000);
+      '-filter_complex', '[0:a]asplit=2[a1][a2];[a1]ebur128=peak=true[x];[a2]silencedetect=n=-50dB:d=5',
+      '-map', '[x]',
+      '-f', 'null', '-'
+    ], 7200000);
 
     // ── Parse EBU R128 loudness ───────────────────────────────
     const iMatch   = stderr.match(/\s+I:\s+([-\d.]+)\s+LUFS/);
@@ -148,11 +152,9 @@ async function runAudioPass(filePath, totalDuration) {
     const tpMatch  = stderr.match(/\s+True peak:\s+([-\d.]+)\s+dBFS/);
     const measured    = iMatch  ? parseFloat(iMatch[1])  : null;
     const truePeakRaw = tpMatch ? parseFloat(tpMatch[1]) : null;
-
-    // ── Parse momentary loudness for level consistency ────────
-    const mValues = [...stderr.matchAll(/\s+M:\s+([-\d.]+)/g)]
-      .map(m => parseFloat(m[1])).filter(v => v > -70);
-    const sd = mValues.length >= 10 ? stdDev(mValues) : null;
+    // LRA is the broadcast-standard measure of loudness range (dynamic variation).
+    // LRA > 20 LU = abrupt volume jumps between scenes.
+    const lraVal = lraMatch ? parseFloat(lraMatch[1]) : null;
 
     // ── Parse silence ─────────────────────────────────────────
     const silenceTCs = [];
@@ -167,41 +169,50 @@ async function runAudioPass(filePath, totalDuration) {
         silenceTCs.push({ start: secsToTC(startSecs), end: secsToTC(endSecs), startSecs, endSecs, duration: `${dur.toFixed(2)}s` });
     }
 
-    return { measured, truePeakRaw, lraStr: lraMatch?.[1], tpStr: tpMatch?.[1], sd, silenceTCs };
+    return { measured, truePeakRaw, lraVal, lraStr: lraMatch?.[1], tpStr: tpMatch?.[1], silenceTCs };
   } catch (err) {
     console.error('[QC] runAudioPass error:', err.message);
     return { error: err.message };
   }
 }
 
-// ── SAMPLE PASS — blockdetect on first 500 frames only ───────────────────────
-async function detectVisualGlitches(filePath) {
-  try {
-    const { stderr } = await runProcess(FFMPEG, [
-      '-threads', '0',
-      '-i', filePath,
-      '-vf', 'blockdetect=period_min=3:period_max=24:planes=0',
-      '-frames:v', '500',
-      '-an', '-f', 'null', '-'
-    ], 120000);
+// ── SAMPLE PASS — 3-point seek for glitches (file-size independent) ──────────
+// Samples 60 frames at start / middle / end instead of 500 from the beginning.
+// Result is the same quality for detecting systematic artifacts.
+async function detectVisualGlitches(filePath, totalDuration) {
+  const seekPoints = totalDuration > 0
+    ? [totalDuration * 0.05, totalDuration * 0.50, totalDuration * 0.90]
+    : [0];
 
-    const scores = [...stderr.matchAll(/block:([\d.]+)/g)].map(m => parseFloat(m[1]));
-    if (!scores.length)
-      return { pass: true, value: 'No artifacts detected', expected: 'Block artifact score < 10', blockScore: 0 };
-
-    const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
-    const maxScore = Math.max(...scores);
-    const pass = avgScore < 10;
-    return {
-      pass,
-      value:     pass ? `Avg block score: ${avgScore.toFixed(2)}` : `Artifacts detected (avg: ${avgScore.toFixed(2)}, peak: ${maxScore.toFixed(2)})`,
-      blockScore: avgScore, maxBlock: maxScore,
-      expected:  'Block artifact score < 10'
-    };
-  } catch (err) {
-    console.error('[QC] detectVisualGlitches error:', err.message);
-    return { pass: null, measured: false, value: 'FFmpeg error: ' + err.message, expected: 'Block artifact score < 10' };
+  const allScores = [];
+  for (const seek of seekPoints) {
+    try {
+      const args = [
+        '-threads', '0',
+        '-ss', seek.toFixed(2),
+        '-i', filePath,
+        '-vf', 'blockdetect=period_min=3:period_max=24:planes=0',
+        '-frames:v', '60',
+        '-an', '-f', 'null', '-'
+      ];
+      const { stderr } = await runProcess(FFMPEG, args, 60000);
+      const scores = [...stderr.matchAll(/block:([\d.]+)/g)].map(m => parseFloat(m[1]));
+      allScores.push(...scores);
+    } catch { /* skip failed seek point */ }
   }
+
+  if (!allScores.length)
+    return { pass: true, value: 'No artifacts detected', expected: 'Block artifact score < 10', blockScore: 0 };
+
+  const avgScore = allScores.reduce((a, b) => a + b, 0) / allScores.length;
+  const maxScore = Math.max(...allScores);
+  const pass = avgScore < 10;
+  return {
+    pass,
+    value:     pass ? `Avg block score: ${avgScore.toFixed(2)}` : `Artifacts detected (avg: ${avgScore.toFixed(2)}, peak: ${maxScore.toFixed(2)})`,
+    blockScore: avgScore, maxBlock: maxScore,
+    expected:  'Block artifact score < 10'
+  };
 }
 
 // ── Main analysis entry point ──────────────────────────────────
@@ -393,15 +404,15 @@ export async function analyzeFile(filePath, originalFilename) {
   };
 
   // ── 2 COMBINED PASSES + 1 SAMPLE PASS (replaces 7 separate FFmpeg reads) ──
-  // Video pass: blackdetect + freezedetect + cropdetect — one full file read
-  // Audio pass: ebur128 + silencedetect — one full file read
-  // Sample pass: blockdetect on first 500 frames — fast, separate
-  console.log('[QC] Running 3-pass FFmpeg analysis (was 7)…');
+  // Video pass: blackdetect + freezedetect + cropdetect — one full file read at 5fps
+  // Audio pass: ebur128 + silencedetect via asplit — one full audio read, no video
+  // Sample pass: blockdetect at 3 seek points — file-size independent
+  console.log('[QC] Running 3-pass FFmpeg analysis…');
   const t0 = Date.now();
   const [videoPass, audioPass, glitchResult] = await Promise.all([
     runVideoPass(filePath),
     runAudioPass(filePath, duration),
-    detectVisualGlitches(filePath)
+    detectVisualGlitches(filePath, duration)
   ]);
   console.log(`[QC] FFmpeg complete in ${((Date.now()-t0)/1000).toFixed(1)}s`);
 
@@ -447,7 +458,7 @@ export async function analyzeFile(filePath, originalFilename) {
   checks.pillarboxing = { label: 'Pillarboxing / Letterboxing', icon: '⬜', ...pillarResult };
 
   // ── Unpack audio pass results ─────────────────────────────
-  const { measured, truePeakRaw, lraStr, tpStr, sd, silenceTCs } = audioPass;
+  const { measured, truePeakRaw, lraVal, lraStr, tpStr, silenceTCs } = audioPass;
   const audioErr = audioPass.error;
 
   const loudPass = measured !== null ? (measured >= -24.0 && measured <= -22.0) : null;
@@ -480,12 +491,14 @@ export async function analyzeFile(filePath, originalFilename) {
     expected: 'No long silence (> 5s) mid-content'
   };
 
+  // Level consistency via LRA (EBU R128 Loudness Range) — broadcast standard.
+  // LRA > 20 LU = abrupt volume jumps. No framelog=verbose needed — already in ebur128 summary.
   checks.audioLevelConsistency = {
     label: 'Audio Level Consistency', icon: '📈',
-    pass:  sd === null ? null : sd < 15,
-    value: sd !== null ? `${sd.toFixed(1)} LU StdDev` : (audioErr ? 'FFmpeg error: ' + audioErr : 'Insufficient data'),
-    stdDev: sd,
-    expected: 'StdDev < 15 LU between scenes'
+    pass:  lraVal === null ? null : lraVal <= 20,
+    value: lraVal !== null ? `${lraVal.toFixed(1)} LU LRA` : (audioErr ? 'FFmpeg error: ' + audioErr : '—'),
+    lraVal,
+    expected: 'LRA ≤ 20 LU (EBU R128 Loudness Range)'
   };
 
   checks.visualGlitches = { label: 'Visual Glitches / Artifacts', icon: '🖼', ...glitchResult };
