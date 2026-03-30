@@ -1,0 +1,5 @@
+[phases.build]
+cmds = ["npm install --omit=dev"]
+
+[start]
+cmd = "node serve.mjs"
