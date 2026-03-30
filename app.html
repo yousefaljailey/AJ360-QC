@@ -57,6 +57,38 @@ a{text-decoration:none;color:inherit}
 .tb-spacer{flex:1}
 .btn-upload{display:flex;align-items:center;gap:6px;background:var(--gold);color:#000;font-weight:700;font-size:12px;padding:7px 14px;border-radius:8px;border:none;cursor:pointer;transition:opacity 0.2s}
 .btn-upload:hover{opacity:0.88}
+.btn-access{display:none;align-items:center;gap:6px;background:var(--card);color:var(--text);font-weight:600;font-size:12px;padding:7px 14px;border-radius:8px;border:1px solid var(--border2);cursor:pointer;transition:background 0.15s,border-color 0.15s;position:relative}
+.btn-access:hover{background:rgba(255,255,255,0.07);border-color:var(--gold)}
+.btn-access.admin-only{display:flex}
+.access-badge{position:absolute;top:-5px;right:-5px;background:var(--fail);color:#fff;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:99px;display:flex;align-items:center;justify-content:center;padding:0 4px;line-height:1;display:none}
+.access-badge.has-pending{display:flex}
+/* Access management modal */
+#accessModal{display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);align-items:center;justify-content:center}
+#accessModal.open{display:flex}
+.access-modal-box{background:var(--sidebar);border:1px solid var(--border2);border-radius:16px;width:100%;max-width:560px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden}
+.access-modal-head{padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.access-modal-title{font-size:15px;font-weight:700;color:var(--text);letter-spacing:-0.02em}
+.access-modal-body{overflow-y:auto;flex:1;padding:16px 24px}
+.access-tab-row{display:flex;gap:6px;margin-bottom:14px}
+.access-tab{background:none;border:none;color:var(--muted);font-size:11px;font-weight:600;padding:5px 10px;border-radius:6px;cursor:pointer;transition:all 0.15s}
+.access-tab.active{background:var(--card);color:var(--text)}
+.access-user-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:var(--card);margin-bottom:6px}
+.access-user-avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#22CFEE22,#22CFEE44);border:1px solid var(--border2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--gold);flex-shrink:0}
+.access-user-info{flex:1;min-width:0}
+.access-user-name{font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.access-user-email{font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.access-user-dept{font-size:10px;color:var(--faint)}
+.access-status-badge{font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px;text-transform:uppercase;flex-shrink:0}
+.access-status-badge.pending{background:rgba(245,158,11,0.15);color:var(--warn)}
+.access-status-badge.approved{background:rgba(34,207,238,0.12);color:var(--gold)}
+.access-status-badge.rejected{background:rgba(239,68,68,0.12);color:var(--fail)}
+.access-actions{display:flex;gap:6px;flex-shrink:0}
+.acc-btn{border:none;cursor:pointer;font-size:10px;font-weight:700;padding:4px 10px;border-radius:5px;transition:opacity 0.15s}
+.acc-btn:hover{opacity:0.8}
+.acc-btn.approve{background:rgba(34,207,238,0.15);color:var(--gold)}
+.acc-btn.reject{background:rgba(239,68,68,0.12);color:var(--fail)}
+.acc-btn.delete{background:rgba(255,255,255,0.06);color:var(--muted)}
+.access-empty{color:var(--faint);font-size:12px;text-align:center;padding:24px 0}
 .tb-user{display:flex;align-items:center;gap:8px;cursor:pointer;padding:4px 10px;border-radius:8px;transition:background 0.15s}
 .tb-user:hover{background:var(--card)}
 .tb-avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#22CFEE,#1a9db8);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#000;flex-shrink:0}
@@ -286,7 +318,7 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
 
 /* ── Print / PDF styles ── */
 @media print{
-  #sidebar,#topbar,.report-actions,.modal-ov,.filter-bar,.del-btn,.btn-signout,.btn-upload{display:none!important}
+  #sidebar,#topbar,.report-actions,.modal-ov,.filter-bar,.del-btn,.btn-signout,.btn-upload,#accessModal{display:none!important}
   html,body{overflow:visible!important;background:#fff!important;color:#000!important;height:auto!important}
   #app{display:block!important;height:auto!important}
   #main{overflow:visible!important;height:auto!important}
@@ -375,6 +407,11 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
       <div class="tb-divider"></div>
       <div class="tb-jobs">Today: <strong id="tbToday">—</strong> jobs</div>
       <div class="tb-spacer"></div>
+      <button class="btn-access" id="btnManageAccess" onclick="openAccessModal()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        Manage Access
+        <span class="access-badge" id="pendingBadge">0</span>
+      </button>
       <button class="btn-upload" onclick="openUploadModal()">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         New Upload
@@ -641,6 +678,24 @@ td .del-btn:hover{border-color:rgba(239,68,68,0.4);color:var(--fail)}
 <div id="toastContainer"></div>
 
 <!-- ════ UPLOAD MODAL ════ -->
+<!-- ── Access Management Modal ── -->
+<div id="accessModal" onclick="if(event.target===this)closeAccessModal()">
+  <div class="access-modal-box">
+    <div class="access-modal-head">
+      <div class="access-modal-title">Manage Access</div>
+      <button class="modal-close-btn" onclick="closeAccessModal()" style="position:static">✕</button>
+    </div>
+    <div class="access-modal-body">
+      <div class="access-tab-row">
+        <button class="access-tab active" id="tab-pending" onclick="switchAccessTab('pending')">Pending</button>
+        <button class="access-tab" id="tab-approved" onclick="switchAccessTab('approved')">Approved</button>
+        <button class="access-tab" id="tab-rejected" onclick="switchAccessTab('rejected')">Rejected</button>
+      </div>
+      <div id="access-user-list"><div class="access-empty">Loading…</div></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-ov" id="uploadModal" onclick="if(event.target===this)closeUploadModal()">
   <div class="modal-box">
     <button class="modal-close-btn" onclick="closeUploadModal()">✕</button>
@@ -670,6 +725,12 @@ if (!token || !user) { location.href = '/'; }
 document.getElementById('tbName').textContent   = user?.name?.split(' ')[0] || 'User';
 document.getElementById('tbRole').textContent   = user?.role === 'admin' ? 'Admin' : 'Employee';
 document.getElementById('tbAvatar').textContent = user?.name?.charAt(0).toUpperCase() || 'U';
+
+// Show Manage Access button for admins only
+if (user?.role === 'admin') {
+  document.getElementById('btnManageAccess').classList.add('admin-only');
+  refreshPendingBadge();
+}
 
 function signOut() {
   localStorage.removeItem('aj360_token');
@@ -1326,6 +1387,109 @@ async function deleteJob(e, id) {
 }
 
 // ── Upload ──
+// ── Access Management Modal ──────────────────────────────────────────
+let accessUsers = [];
+let accessTab   = 'pending';
+
+async function refreshPendingBadge() {
+  const data = await api('/api/admin/users');
+  if (!data) return;
+  const count = data.filter(u => u.status === 'pending').length;
+  const badge = document.getElementById('pendingBadge');
+  badge.textContent = count;
+  badge.classList.toggle('has-pending', count > 0);
+}
+
+async function openAccessModal() {
+  document.getElementById('accessModal').classList.add('open');
+  accessTab = 'pending';
+  ['pending','approved','rejected'].forEach(t =>
+    document.getElementById('tab-' + t).classList.toggle('active', t === accessTab));
+  await loadAccessUsers();
+}
+
+function closeAccessModal() {
+  document.getElementById('accessModal').classList.remove('open');
+}
+
+function switchAccessTab(tab) {
+  accessTab = tab;
+  ['pending','approved','rejected'].forEach(t =>
+    document.getElementById('tab-' + t).classList.toggle('active', t === tab));
+  renderAccessUsers();
+}
+
+async function loadAccessUsers() {
+  document.getElementById('access-user-list').innerHTML = '<div class="access-empty">Loading…</div>';
+  const data = await api('/api/admin/users');
+  if (!data) {
+    document.getElementById('access-user-list').innerHTML = '<div class="access-empty">Failed to load users.</div>';
+    return;
+  }
+  accessUsers = data;
+  renderAccessUsers();
+}
+
+function renderAccessUsers() {
+  const filtered = accessUsers.filter(u => u.status === accessTab);
+  const list = document.getElementById('access-user-list');
+  if (!filtered.length) {
+    list.innerHTML = `<div class="access-empty">No ${accessTab} users.</div>`;
+    return;
+  }
+  list.innerHTML = filtered.map(u => {
+    const initials = (u.name || '?').charAt(0).toUpperCase();
+    const isPending  = u.status === 'pending';
+    const isApproved = u.status === 'approved';
+    const joined = u.createdAt ? new Date(u.createdAt).toLocaleDateString('en-GB') : '—';
+    const actions = isPending
+      ? `<button class="acc-btn approve" onclick="accessAction('${u.id}','approve')">✓ Approve</button>
+         <button class="acc-btn reject"  onclick="accessAction('${u.id}','reject')">✗ Reject</button>`
+      : isApproved
+      ? `<button class="acc-btn reject"  onclick="accessAction('${u.id}','reject')">Revoke</button>
+         <button class="acc-btn delete"  onclick="accessAction('${u.id}','delete')">Delete</button>`
+      : `<button class="acc-btn approve" onclick="accessAction('${u.id}','approve')">Re-approve</button>
+         <button class="acc-btn delete"  onclick="accessAction('${u.id}','delete')">Delete</button>`;
+    return `
+      <div class="access-user-row" id="arow-${u.id}">
+        <div class="access-user-avatar">${initials}</div>
+        <div class="access-user-info">
+          <div class="access-user-name">${esc(u.name || '—')}</div>
+          <div class="access-user-email">${esc(u.email)}</div>
+          <div class="access-user-dept">${esc(u.department || '—')} · Requested ${joined}</div>
+        </div>
+        <span class="access-status-badge ${u.status}">${u.status}</span>
+        <div class="access-actions">${actions}</div>
+      </div>`;
+  }).join('');
+}
+
+async function accessAction(id, action) {
+  const row = document.getElementById('arow-' + id);
+  if (row) row.style.opacity = '0.4';
+
+  let ok = false;
+  if (action === 'approve') {
+    const r = await api('/api/admin/users/' + id + '/approve', { method:'POST' });
+    ok = !!r;
+  } else if (action === 'reject') {
+    const r = await api('/api/admin/users/' + id + '/reject', { method:'POST' });
+    ok = !!r;
+  } else if (action === 'delete') {
+    const r = await api('/api/admin/users/' + id, { method:'DELETE' });
+    ok = !!r;
+  }
+
+  if (ok) {
+    await loadAccessUsers();
+    refreshPendingBadge();
+    showToast(action === 'approve' ? 'Access granted' : action === 'reject' ? 'Access revoked' : 'User deleted', action === 'approve' ? 'success' : 'info');
+  } else {
+    if (row) row.style.opacity = '1';
+    showToast('Action failed', 'error');
+  }
+}
+
 function openUploadModal()  { document.getElementById('uploadModal').classList.add('open'); }
 function closeUploadModal() {
   document.getElementById('uploadModal').classList.remove('open');
