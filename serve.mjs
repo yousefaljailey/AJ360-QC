@@ -300,15 +300,30 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 * 1024 } });
 
+// In-process job store — always authoritative for the current server process.
+// The file acts as a persistence layer across restarts; in-memory is the source of truth
+// while the process is running so jobs are never lost due to /tmp write failures.
+let _jobStore = null;
+
 function loadJobs() {
+  if (_jobStore) return _jobStore; // always use in-memory if already loaded
   if (!existsSync(JOBS_FILE)) {
-    const seed = { jobs: seedJobs() };
-    writeFileSync(JOBS_FILE, JSON.stringify(seed, null, 2));
-    return seed;
+    _jobStore = { jobs: seedJobs() };
+    try { writeFileSync(JOBS_FILE, JSON.stringify(_jobStore, null, 2)); } catch { /* read-only fs */ }
+    return _jobStore;
   }
-  return JSON.parse(readFileSync(JOBS_FILE, 'utf8'));
+  try {
+    _jobStore = JSON.parse(readFileSync(JOBS_FILE, 'utf8'));
+  } catch {
+    _jobStore = { jobs: seedJobs() };
+  }
+  return _jobStore;
 }
-function saveJobs(store) { writeFileSync(JOBS_FILE, JSON.stringify(store, null, 2)); }
+
+function saveJobs(store) {
+  _jobStore = store; // always update in-memory immediately
+  try { writeFileSync(JOBS_FILE, JSON.stringify(store, null, 2)); } catch { /* ignore on read-only fs */ }
+}
 
 function seedJobs() {
   const now = Date.now();

@@ -1398,10 +1398,19 @@ async function analyzeFile(file) {
     let   dots          = 0;
 
     const job = await new Promise((resolve, reject) => {
+      let nullRetries = 0;
+      const MAX_NULL_RETRIES = 6; // tolerate up to 18s of server unavailability before failing
       const poll = async () => {
         try {
           const j = await api('/api/jobs/' + jobId);
-          if (!j) { reject(new Error('Could not reach server')); return; }
+          if (!j) {
+            nullRetries++;
+            if (nullRetries >= MAX_NULL_RETRIES) { reject(new Error('Could not reach server')); return; }
+            setStatus(`Waiting for server… (retry ${nullRetries}/${MAX_NULL_RETRIES})`, 62);
+            setTimeout(poll, POLL_INTERVAL);
+            return;
+          }
+          nullRetries = 0; // reset on successful response
 
           if (j.status === 'completed') { resolve(j); return; }
           if (j.status === 'error')     { reject(new Error('Server-side QC analysis failed')); return; }
