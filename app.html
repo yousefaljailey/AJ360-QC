@@ -19,9 +19,10 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;font-family:'Inter',sans-serif;font-size:13px;background:var(--bg);color:var(--text);overflow:hidden}
 a{text-decoration:none;color:inherit}
-::-webkit-scrollbar{width:5px;height:5px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:rgba(255,255,255,0.03);border-radius:99px}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:#555;background-clip:padding-box}
 
 /* ── Layout ── */
 #app{display:flex;height:100vh}
