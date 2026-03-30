@@ -114,8 +114,9 @@ async function detectBlackFrames(filePath) {
       });
     }
     return { pass: timecodes.length === 0, count: timecodes.length, timecodes, expected: 'No black frames' };
-  } catch {
-    return { pass: true, count: 0, timecodes: [], error: 'Analysis skipped', expected: 'No black frames' };
+  } catch (err) {
+    console.error('[QC] detectBlackFrames error:', err.message);
+    return { pass: null, measured: false, count: 0, timecodes: [], value: 'FFmpeg error: ' + err.message, expected: 'No black frames' };
   }
 }
 
@@ -145,8 +146,9 @@ async function measureLoudness(filePath) {
       truePeak:    tpMatch  ? `${tpMatch[1]} dBFS` : '—',
       truePeakRaw                          // raw float for peakClipping check
     };
-  } catch {
-    return { pass: false, value: '—', expected: '-23 LUFS (±1 LU)', error: 'Analysis skipped', truePeakRaw: null };
+  } catch (err) {
+    console.error('[QC] measureLoudness error:', err.message);
+    return { pass: null, measured: false, value: 'FFmpeg error: ' + err.message, expected: '-23 LUFS (±1 LU)', truePeakRaw: null };
   }
 }
 
@@ -178,8 +180,9 @@ async function detectFreezeFrames(filePath) {
       });
     }
     return { pass: timecodes.length === 0, count: timecodes.length, timecodes, expected: 'No freeze frames' };
-  } catch {
-    return { pass: true, count: 0, timecodes: [], error: 'Analysis skipped', expected: 'No freeze frames' };
+  } catch (err) {
+    console.error('[QC] detectFreezeFrames error:', err.message);
+    return { pass: null, measured: false, count: 0, timecodes: [], value: 'FFmpeg error: ' + err.message, expected: 'No freeze frames' };
   }
 }
 
@@ -212,8 +215,9 @@ async function detectAudioSilence(filePath, totalDuration) {
       }
     }
     return { pass: timecodes.length === 0, count: timecodes.length, timecodes, expected: 'No long silence (> 5s) mid-content' };
-  } catch {
-    return { pass: true, count: 0, timecodes: [], error: 'Analysis skipped', expected: 'No long silence (> 5s) mid-content' };
+  } catch (err) {
+    console.error('[QC] detectAudioSilence error:', err.message);
+    return { pass: null, measured: false, count: 0, timecodes: [], value: 'FFmpeg error: ' + err.message, expected: 'No long silence (> 5s) mid-content' };
   }
 }
 
@@ -243,8 +247,9 @@ async function detectAudioLevelConsistency(filePath) {
       stdDev:   sd,
       expected: 'StdDev < 15 LU between scenes'
     };
-  } catch {
-    return { pass: true, value: '—', expected: 'StdDev < 15 LU between scenes', error: 'Analysis skipped' };
+  } catch (err) {
+    console.error('[QC] detectAudioLevelConsistency error:', err.message);
+    return { pass: null, measured: false, value: 'FFmpeg error: ' + err.message, expected: 'StdDev < 15 LU between scenes' };
   }
 }
 
@@ -288,8 +293,9 @@ async function detectPillarboxing(filePath, srcWidth, srcHeight) {
       type,
       expected:    'Full frame — no pillarboxing or letterboxing'
     };
-  } catch {
-    return { pass: true, value: 'Analysis skipped', expected: 'Full frame — no pillarboxing or letterboxing', error: 'Analysis skipped' };
+  } catch (err) {
+    console.error('[QC] detectPillarboxing error:', err.message);
+    return { pass: null, measured: false, value: 'FFmpeg error: ' + err.message, expected: 'Full frame — no pillarboxing or letterboxing' };
   }
 }
 
@@ -321,13 +327,15 @@ async function detectVisualGlitches(filePath) {
       maxBlock:   maxScore,
       expected:  'Block artifact score < 10'
     };
-  } catch {
-    return { pass: true, value: 'Analysis skipped', expected: 'Block artifact score < 10', error: 'Analysis skipped' };
+  } catch (err) {
+    console.error('[QC] detectVisualGlitches error:', err.message);
+    return { pass: null, measured: false, value: 'FFmpeg error: ' + err.message, expected: 'Block artifact score < 10' };
   }
 }
 
 // ── Main analysis entry point ──────────────────────────────────
 export async function analyzeFile(filePath, originalFilename) {
+  console.log('[QC] Starting analysis:', originalFilename, '| path:', filePath);
   const ext = originalFilename.split('.').pop().toLowerCase();
 
   // Get metadata (fast, run in parallel)
@@ -337,7 +345,9 @@ export async function analyzeFile(filePath, originalFilename) {
       getMetadata(filePath),
       getMediaInfoData(filePath)
     ]);
+    console.log('[QC] Metadata OK — streams:', meta.streams?.length, '| MediaInfo:', mediaInfo ? 'yes' : 'not available');
   } catch (err) {
+    console.error('[QC] Metadata error:', err.message);
     return { error: 'Could not read file: ' + err.message };
   }
 
@@ -512,6 +522,7 @@ export async function analyzeFile(filePath, originalFilename) {
   };
 
   // ── RUN EXPENSIVE FFmpeg ANALYSES IN PARALLEL ─────────────
+  console.log('[QC] Running FFmpeg analyses in parallel…');
   const [blackResult, loudResult, freezeResult, silenceResult,
          consistencyResult, pillarResult, glitchResult] = await Promise.all([
     detectBlackFrames(filePath),
@@ -522,6 +533,7 @@ export async function analyzeFile(filePath, originalFilename) {
     detectPillarboxing(filePath, width, height),
     detectVisualGlitches(filePath)
   ]);
+  console.log('[QC] FFmpeg analyses complete | blackFrames:', blackResult.pass, '| loudness:', loudResult.pass, '| freeze:', freezeResult.pass);
 
   // Wire FFmpeg results into checks
   checks.blackFrames = { label: 'Black Frames', icon: '⬛', ...blackResult };
