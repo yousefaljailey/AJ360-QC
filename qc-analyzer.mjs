@@ -88,23 +88,27 @@ async function getMediaInfoData(filePath) {
 // ── VIDEO SEGMENT WORKER ──────────────────────────────────────────────────────
 // Analyzes one time segment of the file. Each worker runs as a separate FFmpeg
 // process, allowing multiple CPU cores to work in parallel.
-// Scale to 640x360 before filters: reduces filter CPU ~36x for UHD.
-// Detection quality is identical — black/freeze are visible at any resolution.
-async function runVideoSegment(filePath, startSec, durSec, segIdx) {
-  // For single-worker short files (durSec > 1e8 means "full file"), don't pass -t at all.
-  // For multi-segment: pre-input -ss is fast but can misfire on MP4 B-frames; we accept that
-  // because on short files we use 1 worker anyway and skip -ss entirely (startSec=0).
+//
+// Speed stack (cumulative):
+//   fps=5           — process only 5 frames/s through filters (was 25)  → 5× less filter work
+//   scale=320:180   — quarter the pixels vs 640×360                     → 4× less filter work
+//   skip_frame bidir— skip B-frames at decode level (H.264/HEVC)        → 2-10× less decode work
+//   skip_loop_filter— skip deblocking step                              → ~20% less per-frame CPU
+//   Combined on 6h UHD MXF: ~20× less filter CPU, more CPU free for I/O
+async function runVideoSegment(filePath, startSec, durSec, segIdx, numThreads = 1) {
   const isFullFile = durSec >= 1e8;
   const args = [
-    '-threads', '2',
+    '-threads',          String(numThreads),
+    '-skip_frame',       'bidir',     // skip B-frames at decode level (safe on I-frame-only MXF)
+    '-skip_loop_filter', 'all',       // skip deblocking — not needed for detection tasks
     ...(!isFullFile && startSec > 0 ? ['-ss', startSec.toFixed(3)] : []),
     '-i', filePath,
     ...(isFullFile ? [] : ['-t', durSec.toFixed(3)]),
-    '-vf', 'scale=640:360:flags=fast_bilinear,blackdetect=d=0.2:pix_th=0.10,freezedetect=n=-60dB:d=1',
+    '-vf', 'fps=5,scale=320:180:flags=fast_bilinear,blackdetect=d=0.2:pix_th=0.10,freezedetect=n=-60dB:d=1',
     '-an', '-f', 'null', '-'
   ];
   try {
-    const { stderr } = await runProcess(FFMPEG, args, 7200000);
+    const { stderr } = await runProcess(FFMPEG, args, 6 * 3600 * 1000); // 6h max per segment
 
     const blackTCs = [];
     for (const m of stderr.matchAll(/black_start:([\d.]+)\s+black_end:([\d.]+)\s+black_duration:([\d.]+)/g)) {
@@ -144,35 +148,41 @@ async function runVideoPass(filePath, duration) {
   } catch { /* ignore — use duration heuristic */ }
   const fileSizeGB = fileSizeBytes / 1e9;
 
-  // Configurable via env var — tune to Railway CPU count
-  const MAX_WORKERS = Math.min(parseInt(process.env.QC_WORKERS || '4'), 8);
+  // Configurable via env var — set QC_WORKERS to match Railway vCPU count
+  const MAX_WORKERS = Math.min(parseInt(process.env.QC_WORKERS || '4'), 16);
 
-  // Use 1 worker for small files: < 5 GB OR < 10 min duration
-  // Parallel workers only help when decode time >> spawn overhead (large MXF)
-  const NUM_WORKERS = (fileSizeGB >= 5 || duration >= 600)
-    ? MAX_WORKERS
-    : 1;
+  // Worker/thread allocation strategy:
+  //   Small files (< 5 GB, < 10 min): 1 worker with all CPU threads (fastest for short content)
+  //   Medium files (< 50 GB, < 1 h):  MAX_WORKERS workers, 1 thread each
+  //   Large files (≥ 50 GB, ≥ 1 h):   MAX_WORKERS workers, 1 thread each (I/O bound anyway)
+  let NUM_WORKERS, numThreads;
+  if (fileSizeGB < 5 && duration < 600) {
+    NUM_WORKERS = 1;
+    numThreads  = 0; // auto = FFmpeg uses all available CPU threads for single worker
+  } else {
+    NUM_WORKERS = MAX_WORKERS;
+    numThreads  = 1; // 1 thread each — avoids hyperthreading contention across workers
+  }
 
-  const OVERLAP_SEC = 3; // catch events spanning a boundary
+  const OVERLAP_SEC = 3; // catch events spanning a segment boundary
 
   // Guard: if duration is unknown/0, run a single full-file pass (no -t limit)
   if (duration <= 0) {
     console.log('[QC] Video: duration unknown — single full-file pass');
-    const results = [await runVideoSegment(filePath, 0, 1e9, 0)]; // durSec=1e9 → FFmpeg reads until EOF
-    const crops = [];
-    const hadError = results[0].error != null && results[0].blackTCs.length === 0;
-    return { blackTCs: hadError ? null : results[0].blackTCs, freezeTCs: hadError ? null : results[0].freezeTCs, crops, error: hadError ? results[0].error : undefined };
+    const result = await runVideoSegment(filePath, 0, 1e9, 0, 0);
+    const hadError = result.error != null && result.blackTCs.length === 0;
+    return { blackTCs: hadError ? null : result.blackTCs, freezeTCs: hadError ? null : result.freezeTCs, crops: [], error: hadError ? result.error : undefined };
   }
 
   const segLen = duration / NUM_WORKERS;
-  console.log(`[QC] Video: ${NUM_WORKERS} worker(s) × ${segLen.toFixed(0)}s (file: ${fileSizeGB.toFixed(1)} GB, dur: ${duration.toFixed(0)}s)`);
+  console.log(`[QC] Video: ${NUM_WORKERS} worker(s) × ${segLen.toFixed(0)}s each | file: ${fileSizeGB.toFixed(1)} GB, dur: ${(duration/3600).toFixed(2)}h | threads/worker: ${numThreads || 'auto'}`);
 
   const tasks = Array.from({ length: NUM_WORKERS }, (_, i) => {
     const rawStart = i * segLen;
     const rawEnd   = (i + 1) * segLen;
     const start = Math.max(0, rawStart - (i > 0 ? OVERLAP_SEC : 0));
     const end   = Math.min(duration, rawEnd + (i < NUM_WORKERS - 1 ? OVERLAP_SEC : 0));
-    return runVideoSegment(filePath, start, end - start, i);
+    return runVideoSegment(filePath, start, end - start, i, numThreads);
   });
 
   const results = await Promise.all(tasks);
@@ -195,9 +205,9 @@ async function runVideoPass(filePath, duration) {
       const { stderr } = await runProcess(FFMPEG, [
         '-threads', '2', '-ss', ss.toFixed(2), '-t', '10',
         '-i', filePath,
-        '-vf', 'scale=640:360:flags=fast_bilinear,cropdetect=24:16:0',
+        '-vf', 'fps=5,scale=320:180:flags=fast_bilinear,cropdetect=24:16:0',
         '-frames:v', '30', '-an', '-f', 'null', '-'
-      ], 60000);
+      ], 120000);
       crops.push(...[...stderr.matchAll(/crop=(\d+):(\d+):(\d+):(\d+)/g)]
         .map(m => ({ w: parseInt(m[1]), h: parseInt(m[2]), x: parseInt(m[3]), y: parseInt(m[4]) })));
     }
@@ -218,20 +228,19 @@ async function runVideoPass(filePath, duration) {
 // Single full audio read. No framelog=verbose (would produce GB of output for large files).
 // Level consistency derived from LRA which ebur128 already computes — broadcast standard.
 async function runAudioPass(filePath, totalDuration) {
-  // Cap audio analysis at 10 min for files longer than 10 min.
-  // EBU R128 integrated loudness is statistically stable after ~5min of content.
-  // This makes MP4/short-content analysis 3-5× faster with no meaningful quality loss.
-  const analysisDur = totalDuration > 600 ? ['-t', '600'] : [];
+  // Full-file audio analysis — EBU R128 integrated loudness must cover the whole programme.
+  // Audio decode is fast (100×+ real-time for PCM/AAC) so even a 6-hour file typically
+  // completes in a few minutes. The 4-hour timeout covers the largest expected files.
+  const timeoutMs = 4 * 3600 * 1000; // 4 hours max
   try {
     const { stderr } = await runProcess(FFMPEG, [
       '-threads', '0',
-      '-vn',                    // skip video entirely — audio only
-      ...analysisDur,           // -t 600 BEFORE -i caps decode to first 10 min
+      '-vn',                    // skip video entirely — audio-only demux
       '-i', filePath,
       '-filter_complex', '[0:a]asplit=2[a1][a2];[a1]ebur128=peak=true[x];[a2]silencedetect=n=-50dB:d=5',
       '-map', '[x]',
       '-f', 'null', '-'
-    ], 7200000);
+    ], timeoutMs);
 
     // ── Parse EBU R128 loudness ───────────────────────────────
     const iMatch   = stderr.match(/\s+I:\s+([-\d.]+)\s+LUFS/);

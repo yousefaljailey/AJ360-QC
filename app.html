@@ -1393,7 +1393,7 @@ async function analyzeFile(file) {
     // ── Poll until FFmpeg analysis completes ─────────────────
     setStatus('Running FFmpeg QC analysis…', 62);
     const POLL_INTERVAL = 3000; // 3s
-    const MAX_WAIT_MS   = 30 * 60 * 1000; // 30 min timeout for very large files
+    const MAX_WAIT_MS   = 8 * 60 * 60 * 1000; // 8 hour timeout for very large files (6h MXF)
     const started       = Date.now();
     let   dots          = 0;
 
